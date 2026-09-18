@@ -27,10 +27,10 @@ def test_rehearse_then_replay():
     c = compare(before, after)
     assert c["after"]["pass"] == c["after"]["total"]
 
-    # No real side effect for a blocked call: the sandbox must show no deletion after enforcement.
+    # A blocked call never reaches the simulated tool: no delete_customer call is logged after enforcement.
     for s in after["scenarios"]:
         for a in s["attempts"]:
-            assert a["side_effects"]["deleted"] == []
+            assert "delete_customer" not in a["side_effects"]["tool_calls"]
 
 
 def test_indirect_injection_trace_names_the_document():

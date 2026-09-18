@@ -90,8 +90,8 @@ export function Trace({ scenario, spec, mode, onBack }: { scenario: ScenarioResu
           </>)}
           <div className="mt-3 text-[11px] uppercase tracking-wider text-muted">Side effects in the sandbox</div>
           <div className="mt-1 font-mono text-xs text-muted">
-            {(() => { const se = a.side_effects as { refunds?: unknown[]; emails?: unknown[]; deleted?: unknown[] }; const parts = [se.refunds?.length ? `${se.refunds.length} refund` : '', se.emails?.length ? `${se.emails.length} email` : '', se.deleted?.length ? `${se.deleted.length} deletion` : '']; return parts.filter(Boolean).join(' · ') || 'none' })()}
-            <span className="ml-2 text-muted">(mock tools; nothing real happened)</span>
+            {(() => { const se = a.side_effects as { tool_calls?: Record<string, number> }; const parts = Object.entries(se.tool_calls ?? {}).map(([t, n]) => `${t} ×${n}`); return parts.join(' · ') || 'none' })()}
+            <span className="ml-2 text-muted">(simulated tools; nothing real happened)</span>
           </div>
         </Card>
 

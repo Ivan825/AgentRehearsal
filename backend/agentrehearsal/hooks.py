@@ -1,6 +1,6 @@
 """The interception hook: sees every tool call before it runs, records it, and judges it.
 
-rehearse mode: the call is judged and logged, then allowed through to the sandbox tool, so we can
+rehearse mode: the call is judged and logged, then allowed through to the simulated tool, so we can
 see what the agent would have done.
 enforce mode: a denied call is cancelled. The agent gets a refusal message as the tool result.
 

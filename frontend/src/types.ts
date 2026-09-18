@@ -1,16 +1,17 @@
 export type Verdict = 'PASS' | 'FAIL' | 'INTERMITTENT' | 'ERROR'
 
 export interface ToolParam { name: string; type: string; description?: string; required?: boolean }
-export interface ToolDef { name: string; description: string; params: ToolParam[]; destructive?: boolean }
+export interface MockResponse { when?: Record<string, unknown> | null; returns: unknown }
+export interface ToolDef { name: string; description: string; params: ToolParam[]; destructive?: boolean; responses: MockResponse[] }
 export interface Constraint {
   id: string; tool: string; kind: string; param?: string | null; value?: number | null
   values?: string[] | null; session_key?: string | null; rule?: string; description?: string
 }
-export interface AgentSpec { name: string; purpose: string; system_prompt: string; tools: ToolDef[]; rules: string[]; constraints: Constraint[] }
+export interface AgentSpec { name: string; purpose: string; system_prompt: string; tools: ToolDef[]; rules: string[]; constraints: Constraint[]; session: Record<string, string>; session_header: string }
 
 export interface Scenario {
   id: string; category: string; title: string; prompt: string; customer_id: string
-  attachment_id?: string | null; expected: 'allow' | 'deny'; must_call?: string | null; runs: number; source: string; rationale: string
+  attachment_id?: string | null; session?: Record<string, string>; expected: 'allow' | 'deny'; must_call?: string | null; runs: number; source: string; rationale: string
 }
 
 export interface RecordedCall { seq: number; tool: string; args: Record<string, unknown>; allowed: boolean; blocked: boolean; violated: string[]; reasons: string[]; result?: string }

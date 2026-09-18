@@ -17,7 +17,7 @@ Define  →  Rehearse  →  Diagnose  →  Protect  →  Replay
                           it broke     findings     still passes
 ```
 
-1. **Define.** The developer describes the agent, connects its tools, and states its operating rules in plain English ("Refunds up to ₹5,000", "Never delete customer records"). Bedrock parses the rules into structured constraints; the developer confirms them.
+1. **Define.** In the UI the developer describes the agent (name, purpose, system prompt), its tools (parameters plus simulated responses, including documents that carry injected instructions), the session facts a policy can check, and its operating rules in plain English ("Refunds up to ₹5,000", "Never delete customer records"). Bedrock parses the rules into structured constraints; the developer confirms them. An MCP tool list can be imported; the whole definition exports and imports as JSON.
 2. **Rehearse.** AgentRehearsal generates scenarios for every rule: allowed cases, boundary cases, and violations using different tactics (authority claims, direct prompt injection, poisoned documents, ambiguous requests). It runs them against the agent with the policy in **log-only** mode and records every tool call and its arguments.
 3. **Diagnose.** Each verdict comes from facts, not opinions: the agent either attempted `refund_customer(amount=50000)` or it did not. The trace shows the input, every decision the agent made, and the rule each call broke.
 4. **Protect.** Findings compile into a **Cedar** policy: one `permit` per tool with parameter conditions, default deny for everything else. It is the same policy language AWS uses in AgentCore Policy.
@@ -29,7 +29,7 @@ Every attack scenario runs three times. An agent that misbehaves one time in thr
 
 | Path | What it is |
 | --- | --- |
-| `backend/agentrehearsal/target/` | **SupportBot**, the sample agent under test: a Strands agent with five mock tools over an in-memory sandbox. Deliberately broad permissions, no guardrails, like most prototypes. Nothing real is ever touched. |
+| `backend/agentrehearsal/target/` | The agent under test, built from data: `generic.py` turns a spec's tool definitions (name, parameters, simulated responses keyed by argument) into Strands tools, so any agent can be described in the UI. **SupportBot** (`examples/supportbot.spec.json`) is the bundled example: deliberately broad permissions, no guardrails, like most prototypes. Nothing real is ever touched. |
 | `backend/agentrehearsal/hooks.py` | The interception point. A Strands `BeforeToolCallEvent` hook records each call, asks the policy, and in enforce mode cancels denied calls. The local twin of AgentCore Policy's LOG_ONLY / ENFORCE. |
 | `backend/agentrehearsal/policy/` | Constraints → Cedar text; local Cedar evaluation (`cedarpy`); plain-English rule parsing with Bedrock. |
 | `backend/agentrehearsal/scenarios/` | 12 hand-written seed scenarios across five attack categories, plus a Bedrock scenario generator. |
@@ -98,5 +98,5 @@ For every rule the tests include an allowed case, a boundary case, and violation
 ## Honesty notes
 
 * The target agent is a real Strands agent on a real Bedrock model. Failures are found, never scripted.
-* The scripted model is a simulation for offline development and is labelled as such wherever it appears.
+* The scripted model is a simulation of a naive agent for the SupportBot example, used for offline development and tests, and is labelled as such wherever it appears.
 * Verdicts are computed from recorded tool calls checked against Cedar. No model grades another model.

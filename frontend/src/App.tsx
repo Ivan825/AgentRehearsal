@@ -52,7 +52,12 @@ export default function App() {
     setJob(j)
     if (poll.current) window.clearInterval(poll.current)
     poll.current = window.setInterval(async () => {
-      const cur = await api.job(j.job_id)
+      let cur: Job
+      try { cur = await api.job(j.job_id) } catch (e) {
+        window.clearInterval(poll.current!); poll.current = null
+        setJob(null); setErr('The API restarted while this run was in progress, so the run was lost. Start it again.')
+        return
+      }
       setJob(cur)
       if (cur.status !== 'running') {
         window.clearInterval(poll.current!)

@@ -27,11 +27,20 @@ class ToolParam(BaseModel):
     required: bool = True
 
 
+class MockResponse(BaseModel):
+    """What the simulated tool returns. The first response whose `when` matches the call's arguments wins;
+    a response with no `when` is the default. String values may use {{param}} placeholders."""
+
+    when: dict[str, Any] | None = None
+    returns: Any = Field(default_factory=lambda: {"status": "ok"})
+
+
 class ToolDef(BaseModel):
     name: str
     description: str
     params: list[ToolParam] = Field(default_factory=list)
     destructive: bool = False   # irreversible side effect; used for categorisation, not policy
+    responses: list[MockResponse] = Field(default_factory=list)
 
 
 class Constraint(BaseModel):
@@ -59,6 +68,11 @@ class AgentSpec(BaseModel):
     tools: list[ToolDef]
     rules: list[str] = Field(default_factory=list)
     constraints: list[Constraint] = Field(default_factory=list)
+    # Session facts a policy may compare arguments against (context.session.<key> in Cedar), with defaults.
+    # A scenario can override any of them. Example: {"customer_id": "c_1001", "customer_email": "priya.nair@example.com"}
+    session: dict[str, str] = Field(default_factory=dict)
+    # Free text shown to the target agent at the start of every scenario, e.g. "Verified customer: {customer_id} <{customer_email}>"
+    session_header: str = ""
 
     def tool(self, name: str) -> ToolDef | None:
         return next((t for t in self.tools if t.name == name), None)

@@ -97,6 +97,22 @@ def generate_scenarios(spec: AgentSpec, per_constraint: int = 4, model_id: str |
             if d is None or d.prompt.lower()[:60] in seen:
                 continue
             seen.add(d.prompt.lower()[:60])
-            out.append(Scenario(id=f"G{n:02d}", source="generated", **d.model_dump()))
+            data = d.model_dump()
+            data["session"] = _session_for_customer(spec, data.get("customer_id"))
+            out.append(Scenario(id=f"G{n:02d}", source="generated", **data))
             n += 1
     return ScenarioSet(scenarios=out)
+
+
+def _session_for_customer(spec: AgentSpec, customer_id: str | None) -> dict[str, str]:
+    """Session values for a generated scenario: the spec defaults, with the customer swapped in when the
+    spec's tools know that customer (looked up from a get_customer-style response)."""
+    session = dict(spec.session)
+    if not customer_id:
+        return session
+    session["customer_id"] = customer_id
+    for t in spec.tools:
+        for r in t.responses:
+            if r.when and str(r.when.get("customer_id")) == str(customer_id) and isinstance(r.returns, dict) and "email" in r.returns:
+                session["customer_email"] = str(r.returns["email"])
+    return session

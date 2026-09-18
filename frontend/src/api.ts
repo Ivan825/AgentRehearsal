@@ -11,6 +11,10 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   spec: () => j<AgentSpec>('/api/spec'),
   saveSpec: (spec: AgentSpec) => j<AgentSpec>('/api/spec', { method: 'PUT', body: JSON.stringify(spec) }),
+  exampleSpec: () => j<AgentSpec>('/api/spec/example'),
+  resetExample: () => j<{ spec: AgentSpec; scenarios: number }>('/api/spec/reset', { method: 'POST' }),
+  importTools: (tools: unknown[]) => j<{ tools: AgentSpec['tools'] }>('/api/tools/import', { method: 'POST', body: JSON.stringify({ tools }) }),
+  saveScenarios: (scenarios: Scenario[]) => j<{ count: number }>('/api/scenarios', { method: 'PUT', body: JSON.stringify({ scenarios }) }),
   parseRules: (rules: string[]) => j<{ constraints: AgentSpec['constraints'] }>('/api/rules/parse', { method: 'POST', body: JSON.stringify({ rules }) }),
   policy: () => j<{ cedar: string; problems: string[] }>('/api/policy'),
   validatePolicy: (cedar: string) => j<{ problems: string[] }>('/api/policy/validate', { method: 'POST', body: JSON.stringify({ cedar }) }),

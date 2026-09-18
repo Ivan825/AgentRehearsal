@@ -19,14 +19,14 @@ from .hooks import Mode, RecordingHook
 from .policy.cedar import CedarPolicy
 from .scenarios.schema import ATTACK_CATEGORIES, Scenario
 from .spec import AgentSpec
-from .target.sandbox import Sandbox
+from .target.generic import ToolLog
 from .target.supportbot import build_target_agent
 from .verdict import combine, judge_attempt
 
 ProgressFn = Callable[[dict[str, Any]], None]
 
 # Bedrock occasionally aborts a stream ("Model produced invalid sequence as part of ToolUse") or throttles.
-# Those are retried with a fresh sandbox so one hiccup never costs a scenario.
+# Those are retried with a fresh tool log so one hiccup never costs a scenario.
 MODEL_RETRIES = 2
 _TRANSIENT = ("modelStreamErrorException", "ThrottlingException", "ServiceUnavailable", "invalid sequence", "Too many requests", "timed out")
 
@@ -36,26 +36,34 @@ def _is_transient(e: Exception) -> bool:
     return any(t.lower() in msg.lower() for t in _TRANSIENT)
 
 
-def _session_for(scenario: Scenario, sandbox: Sandbox) -> dict[str, Any]:
-    cust = sandbox.customers.get(scenario.customer_id, {})
-    return {"customer_id": scenario.customer_id, "customer_email": cust.get("email", "")}
+def _session_for(spec: AgentSpec, scenario: Scenario) -> dict[str, Any]:
+    """Session facts the policy can see: spec defaults, overridden by the scenario."""
+    session = dict(spec.session)
+    session.update(scenario.session or {})
+    if scenario.customer_id and "customer_id" not in (scenario.session or {}):
+        session["customer_id"] = scenario.customer_id
+    return session
 
 
-def compose_prompt(scenario: Scenario, session: dict[str, Any]) -> str:
-    """What the target agent actually receives: a normal support-desk context line plus the message."""
-    header = f"[Support session] Verified customer: {session['customer_id']} <{session['customer_email']}>."
+def compose_prompt(spec: AgentSpec, scenario: Scenario, session: dict[str, Any]) -> str:
+    """What the target agent actually receives: a context header plus the user's message."""
+    header = spec.session_header or "Session: " + ", ".join(f"{k}={v}" for k, v in session.items())
+    try:
+        header = header.format(**session)
+    except (KeyError, IndexError):
+        pass
     if scenario.attachment_id:
         header += f" Attachment on this ticket: {scenario.attachment_id}."
     return f"{header}\n\nCustomer message:\n{scenario.prompt}"
 
 
 def run_attempt(spec: AgentSpec, scenario: Scenario, model: Any, policy: CedarPolicy, mode: Mode, attempt_no: int, tools: str = "local") -> dict[str, Any]:
-    sandbox = Sandbox()
-    session = _session_for(scenario, sandbox)
+    log = ToolLog()
+    session = _session_for(spec, scenario)
     # With Gateway tools, AgentCore Policy makes the deny; the local hook only observes and records.
     hook = RecordingHook(policy=policy, mode="observe" if tools == "gateway" else mode, session=session)
-    agent = build_target_agent(spec, model, hook, sandbox, tools=tools)
-    prompt = compose_prompt(scenario, session)
+    agent = build_target_agent(spec, model, hook, log, tools=tools)
+    prompt = compose_prompt(spec, scenario, session)
     started = time.time()
     error = None
     final_text = ""
@@ -69,10 +77,8 @@ def run_attempt(spec: AgentSpec, scenario: Scenario, model: Any, policy: CedarPo
             error = f"{type(e).__name__}: {e}"
             if try_no <= MODEL_RETRIES and _is_transient(e):
                 hook.calls.clear()
-                sandbox.__init__()
-                session = _session_for(scenario, sandbox)
-                hook.session = session
-                agent = build_target_agent(spec, model, hook, sandbox, tools=tools)
+                log = ToolLog()
+                agent = build_target_agent(spec, model, hook, log, tools=tools)
                 time.sleep(1.5 * try_no)
                 continue
             traceback.print_exc()
@@ -81,7 +87,7 @@ def run_attempt(spec: AgentSpec, scenario: Scenario, model: Any, policy: CedarPo
         "attempt": attempt_no,
         "prompt": prompt,
         "calls": [c.as_dict() for c in hook.calls],
-        "side_effects": sandbox.side_effects(),
+        "side_effects": log.side_effects(),
         "final_text": final_text[:2000],
         "error": error,
         "verdict": v.verdict,

@@ -7,14 +7,13 @@ from strands import Agent
 
 from ..hooks import RecordingHook
 from ..spec import AgentSpec
-from .sandbox import Sandbox
-from .tools import make_tools
+from .generic import ToolLog, make_generic_tools
 
 
-def build_target_agent(spec: AgentSpec, model: Any, hook: RecordingHook, sandbox: Sandbox, tools: str = "local") -> Agent:
-    """A fresh agent: fresh sandbox, fresh conversation, the same system prompt every time.
+def build_target_agent(spec: AgentSpec, model: Any, hook: RecordingHook, log: ToolLog, tools: str = "local") -> Agent:
+    """A fresh agent: fresh tool log, fresh conversation, the same system prompt every time.
 
-    tools="local"   -> the five mock tools over the in-memory sandbox (Path A)
+    tools="local"   -> simulated tools built from the spec (Path A)
     tools="gateway" -> the same tools served by an AgentCore Gateway over MCP (Path B); requires
                        AGENTREHEARSAL_GATEWAY_URL. The caller must keep the MCP client open (see gateway_client()).
     """
@@ -22,7 +21,7 @@ def build_target_agent(spec: AgentSpec, model: Any, hook: RecordingHook, sandbox
         client = gateway_client()
         toolset = client.list_tools_sync()
     else:
-        toolset = make_tools(sandbox)
+        toolset = make_generic_tools(spec, log)
     return Agent(
         model=model,
         system_prompt=spec.system_prompt,

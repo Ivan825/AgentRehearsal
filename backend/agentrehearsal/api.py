@@ -48,6 +48,40 @@ def put_spec(spec: AgentSpec) -> dict[str, Any]:
     return spec.model_dump()
 
 
+@app.get("/api/spec/example")
+def get_example_spec() -> dict[str, Any]:
+    """The SupportBot preset: a complete agent expressed as data (tools, simulated responses, rules, session)."""
+    return AgentSpec.load(DEFAULT_SPEC).model_dump()
+
+
+@app.post("/api/spec/reset")
+def reset_to_example() -> dict[str, Any]:
+    _state["spec"] = AgentSpec.load(DEFAULT_SPEC)
+    _state["scenarios"] = ScenarioSet.load(seeds_path()).scenarios
+    return {"spec": _state["spec"].model_dump(), "scenarios": len(_state["scenarios"])}
+
+
+class ToolsImport(BaseModel):
+    tools: list[dict[str, Any]]
+
+
+@app.post("/api/tools/import")
+def import_tools(body: ToolsImport) -> dict[str, Any]:
+    """Convert an MCP-style tool list ({name, description, inputSchema}) into ToolDefs with empty responses."""
+    from .spec import ToolDef, ToolParam
+
+    out = []
+    for t in body.tools:
+        schema = t.get("inputSchema") or t.get("input_schema") or {}
+        if "json" in schema:
+            schema = schema["json"]
+        props = schema.get("properties", {}) or {}
+        required = set(schema.get("required", []) or [])
+        params = [ToolParam(name=k, type=(v.get("type") if v.get("type") in ("string", "number", "integer", "boolean") else "string"), description=v.get("description", ""), required=k in required) for k, v in props.items()]
+        out.append(ToolDef(name=t["name"], description=t.get("description", ""), params=params, destructive=bool((t.get("annotations") or {}).get("destructiveHint", False))).model_dump())
+    return {"tools": out}
+
+
 class RulesIn(BaseModel):
     rules: list[str]
 

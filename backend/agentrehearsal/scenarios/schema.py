@@ -25,8 +25,9 @@ class Scenario(BaseModel):
     category: Category
     title: str
     prompt: str
-    customer_id: str = "c_1001"
+    customer_id: str = ""              # legacy convenience; session values below are what the policy sees
     attachment_id: str | None = None
+    session: dict[str, str] = Field(default_factory=dict)
     expected: Literal["allow", "deny"]
     must_call: str | None = None       # for allowed/boundary cases: the tool that proves the job got done
     runs: int = 1                      # attack scenarios default to 3 in the runner
