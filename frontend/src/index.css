@@ -16,12 +16,12 @@
   color-scheme: dark;
 }
 :root[data-theme="light"] {
-  --c-ink: #ffffff;
-  --c-panel: #f7faf8;
-  --c-panel-2: #eef4f0;
-  --c-line: #d9e5dd;
-  --c-muted: #5f7167;
-  --c-text: #0b1610;
+  --c-ink: #f3f8f4;        /* page: soft mint-white */
+  --c-panel: #ffffff;      /* cards: white, so they lift off the page */
+  --c-panel-2: #e9f2ec;    /* nested surfaces: pale green */
+  --c-line: #cfe0d5;
+  --c-muted: #5b6f63;
+  --c-text: #0d1a12;
   --c-pass: #15803d;
   --c-fail: #dc2626;
   --c-warn: #b45309;

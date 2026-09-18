@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from './api'
+import { Link, useNavigate } from 'react-router-dom'
+import { api, session } from './api'
 import type { AgentSpec, Comparison, Job, Run, RunListItem, ScenarioResult } from './types'
 import { Define } from './components/Define'
 import { Scorecard } from './components/Scorecard'
@@ -9,6 +10,7 @@ import { Replay } from './components/Replay'
 import { LiveRun } from './components/LiveRun'
 import { Landing } from './components/Landing'
 import { Button, Card } from './components/ui'
+import { Logo, useTheme } from './site/Shell'
 
 type Stage = 'define' | 'rehearse' | 'diagnose' | 'protect' | 'replay'
 const STAGES: { id: Stage; label: string; n: number }[] = [
@@ -32,13 +34,9 @@ export default function App() {
   const [selected, setSelected] = useState<ScenarioResult | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const poll = useRef<number | null>(null)
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    try { return (localStorage.getItem('ar-theme') as 'dark' | 'light') || 'dark' } catch { return 'dark' }
-  })
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-    try { localStorage.setItem('ar-theme', theme) } catch { /* ignore */ }
-  }, [theme])
+  const { theme, toggle } = useTheme()
+  const nav = useNavigate()
+  const user = session.user
 
   const refreshRuns = useCallback(() => api.runs().then((r) => setRuns(r.runs)).catch(() => {}), [])
 
@@ -101,17 +99,13 @@ export default function App() {
     <div className="min-h-full">
       <header className="border-b border-line bg-panel/60 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3">
-          <div className="flex items-center gap-2.5">
-            <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
-              <rect x="1.5" y="1.5" width="27" height="27" rx="7" fill="none" stroke="var(--c-accent)" strokeWidth="2" />
-              <path d="M9 16.5 L13 20.5 L21 10.5" fill="none" stroke="var(--c-accent)" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-              <circle cx="21.5" cy="21" r="3.2" fill="var(--c-ink)" stroke="var(--c-fail)" strokeWidth="2" />
-            </svg>
+          <Link to="/" className="flex items-center gap-2.5">
+            <Logo />
             <div>
               <div className="text-base font-bold tracking-tight">AgentRehearsal</div>
-              <div className="hidden text-[11px] text-muted xl:block">Crash-test your AI agent before your users do.</div>
+              <div className="hidden text-[11px] text-muted xl:block">{user ? user.email : 'Crash-test your AI agent before your users do.'}</div>
             </div>
-          </div>
+          </Link>
           <nav className="flex items-center gap-1">
             {STAGES.map((s) => (
               <button key={s.id} onClick={() => setStage(s.id)} className={`rounded-md px-3 py-1.5 text-sm font-medium ${stage === s.id ? 'bg-panel-2 text-text' : 'text-muted hover:text-text'}`}>
@@ -120,9 +114,11 @@ export default function App() {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Toggle theme" className="rounded-md border border-line px-2.5 py-1.5 text-xs text-muted hover:text-text">
+            <Link to="/guides" className="hidden px-2 text-xs text-muted hover:text-text lg:block">Guides</Link>
+            <button onClick={toggle} title="Toggle theme" className="rounded-md border border-line px-2.5 py-1.5 text-xs text-muted hover:text-text">
               {theme === 'dark' ? '☀' : '☾'}
             </button>
+            {user && <button onClick={() => { session.clear(); nav('/') }} className="rounded-md border border-line px-2.5 py-1.5 text-xs text-muted hover:text-text">Sign out</button>}
             <select value={model} onChange={(e) => setModel(e.target.value as 'bedrock' | 'scripted')} className="rounded border border-line bg-panel-2 px-2 py-1.5 text-xs">
               <option value="bedrock">Target model: Bedrock</option>
               <option value="scripted">Target model: scripted (offline sim)</option>

@@ -186,7 +186,7 @@ def summarize(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def save_run(record: dict[str, Any], runs_dir: Path | None = None) -> Path:
+def save_run(record: dict[str, Any], runs_dir: Path | None = None, user_id: str = "cli") -> Path:
     d = runs_dir or config.RUNS_DIR
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{record['run_id']}.json"
@@ -194,8 +194,8 @@ def save_run(record: dict[str, Any], runs_dir: Path | None = None) -> Path:
     try:
         from .store import put_run
 
-        put_run(record)
-    except Exception as e:  # DynamoDB is optional; never fail a run over it
+        put_run(record, user_id=user_id)
+    except Exception as e:  # the store is best effort; never fail a run over it
         print(f"[store] skipped: {e}")
     return p
 

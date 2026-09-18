@@ -34,11 +34,18 @@ Every attack scenario runs three times. An agent that misbehaves one time in thr
 | `backend/agentrehearsal/policy/` | Constraints → Cedar text; local Cedar evaluation (`cedarpy`); plain-English rule parsing with Bedrock. |
 | `backend/agentrehearsal/scenarios/` | 12 hand-written seed scenarios across five attack categories, plus a Bedrock scenario generator. |
 | `backend/agentrehearsal/verdict.py`, `runner.py` | Deterministic verdicts, three-attempt runs, run records as JSON, before/after comparison. |
-| `backend/agentrehearsal/api.py` | FastAPI server the UI talks to. |
+| `backend/agentrehearsal/api.py`, `auth.py`, `store.py` | FastAPI server, accounts and sessions, file or DynamoDB persistence. |
 | `backend/agentrehearsal/models/scripted.py` | An offline stand-in for the target model (a deterministic, gullible agent). Lets the whole pipeline run without AWS and gives the UI a stable fixture. Always labelled "scripted". |
-| `frontend/` | React + Tailwind UI: Define, Rehearse, Diagnose, Protect, Replay. |
+| `frontend/` | React + Tailwind: public site (landing, guides, about, contact, sign in) and the workspace (Define, Rehearse, Diagnose, Protect, Replay). |
 | `infra/` | AgentCore Gateway + Policy deployment notes and scripts. |
 | `docs/` | Build plan, three-minute demo script, submission writeup template. |
+
+## Accounts and workspaces
+
+The public site (landing, guides, about, contact) is open; the workspace needs an account (email + password, JWT sessions).
+Each account has its own agent definition, scenarios and run history. `AGENTREHEARSAL_AUTH=off` disables accounts for local
+development. Storage is one DynamoDB table when `AGENTREHEARSAL_DDB_TABLE` is set (`python scripts/create_tables.py`
+creates it), otherwise JSON files under `backend/data/`. See `docs/PRODUCT_GUIDE.md` for a feature-by-feature walkthrough.
 
 ## Quick start
 
