@@ -13,8 +13,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import re
+import threading
 
 import cedarpy
+
+# cedarpy is a native extension; serialise calls into it so worker threads never enter it concurrently.
+_CEDAR_LOCK = threading.Lock()
 
 from ..config import CEDAR_PRINCIPAL
 from ..spec import AgentSpec, Constraint
@@ -105,7 +109,8 @@ class CedarPolicy:
     def __init__(self, cedar_text: str, spec: AgentSpec | None = None):
         self.text = cedar_text
         self.spec = spec
-        self._policy_set = cedarpy.PolicySet.from_str(cedar_text)
+        with _CEDAR_LOCK:
+            self._policy_set = cedarpy.PolicySet.from_str(cedar_text)
         # Map cedarpy's positional ids (policy0, policy1, ...) to @id annotations when every statement has one.
         ids = re.findall(r'@id\("([^"]+)"\)', cedar_text)
         n_statements = len(re.findall(r'^\s*(?:@id\([^)]*\)\s*)?(?:permit|forbid)\s*\(', cedar_text, re.M))
@@ -122,7 +127,8 @@ class CedarPolicy:
             "resource": f'Tool::"{tool}"',
             "context": {"input": _coerce(args), "session": _coerce(session or {})},
         }
-        result = cedarpy.is_authorized(request, self._policy_set, [])
+        with _CEDAR_LOCK:
+            result = cedarpy.is_authorized(request, self._policy_set, [])
         allowed = result.decision == cedarpy.Decision.Allow
         d = Decision(allowed=allowed, reasons=[self._names.get(r, r) for r in result.diagnostics.reasons], errors=[str(e) for e in result.diagnostics.errors])
         if not allowed and self.spec:

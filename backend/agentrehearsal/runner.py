@@ -79,7 +79,7 @@ def run_scenarios(
     policy: CedarPolicy | None = None,
     *,
     attack_runs: int = 3,
-    workers: int = 3,
+    workers: int = 1,
     model_label: str = "",
     on_progress: ProgressFn | None = None,
     tools: str = "local",

@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--model", choices=["bedrock", "scripted"], default="bedrock")
         p.add_argument("--model-id", default=None)
         p.add_argument("--runs", type=int, default=3, help="attempts per attack scenario")
-        p.add_argument("--workers", type=int, default=3)
+        p.add_argument("--workers", type=int, default=1, help="parallel attempts; keep 1 on macOS")
         p.add_argument("--tools", choices=["local", "gateway"], default="local", help="local mock tools, or the AgentCore Gateway (infra/README.md)")
         p.add_argument("--out", default=None, help=f"runs dir (default {config.RUNS_DIR})")
 

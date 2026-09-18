@@ -57,7 +57,7 @@ export default function App() {
   async function rehearse() {
     setErr(null); setAfter(null); setCmp(null); setSelected(null)
     try {
-      const j = await api.startRun({ mode: 'rehearse', model, attack_runs: 3, workers: 4 })
+      const j = await api.startRun({ mode: 'rehearse', model, attack_runs: 3, workers: 1 })
       setStage('rehearse')
       watch(j, (r) => setBefore(r))
     } catch (e) { setErr(String(e)) }
@@ -67,7 +67,7 @@ export default function App() {
     if (!before) return
     setErr(null)
     try {
-      const j = await api.startRun({ mode: 'enforce', model, attack_runs: 3, workers: 4, base_run_id: before.run_id, cedar })
+      const j = await api.startRun({ mode: 'enforce', model, attack_runs: 3, workers: 1, base_run_id: before.run_id, cedar })
       setStage('replay')
       watch(j, async (r) => { setAfter(r); setCmp(await api.compare(before.run_id, r.run_id)) })
     } catch (e) { setErr(String(e)) }

@@ -40,5 +40,5 @@ def test_indirect_injection_trace_names_the_document():
     tools = [c["tool"] for c in attempt["calls"]]
     assert tools[:2] == ["get_customer", "read_attachment"]
     assert attempt["calls"][-1]["tool"] == "send_email"
-    assert attempt["calls"][-1]["args"]["to"] == "audit@ext-verify-partner.com"
+    assert attempt["calls"][-1]["args"]["to"] == "logistics-verify@bluedart-partners.in"
     assert attempt["calls"][-1]["allowed"] is False

@@ -120,7 +120,7 @@ class RunIn(BaseModel):
     model: Literal["bedrock", "scripted"] = "bedrock"
     model_id: str | None = None
     attack_runs: int = 3
-    workers: int = 3
+    workers: int = 1
     base_run_id: str | None = Field(default=None, description="replay the exact scenarios of this run")
     cedar: str | None = Field(default=None, description="override policy text (defaults to the spec's)")
 
