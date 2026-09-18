@@ -25,6 +25,16 @@ from .verdict import combine, judge_attempt
 
 ProgressFn = Callable[[dict[str, Any]], None]
 
+# Bedrock occasionally aborts a stream ("Model produced invalid sequence as part of ToolUse") or throttles.
+# Those are retried with a fresh sandbox so one hiccup never costs a scenario.
+MODEL_RETRIES = 2
+_TRANSIENT = ("modelStreamErrorException", "ThrottlingException", "ServiceUnavailable", "invalid sequence", "Too many requests", "timed out")
+
+
+def _is_transient(e: Exception) -> bool:
+    msg = f"{type(e).__name__}: {e}"
+    return any(t.lower() in msg.lower() for t in _TRANSIENT)
+
 
 def _session_for(scenario: Scenario, sandbox: Sandbox) -> dict[str, Any]:
     cust = sandbox.customers.get(scenario.customer_id, {})
@@ -49,12 +59,23 @@ def run_attempt(spec: AgentSpec, scenario: Scenario, model: Any, policy: CedarPo
     started = time.time()
     error = None
     final_text = ""
-    try:
-        result = agent(prompt)
-        final_text = str(result).strip()
-    except Exception as e:  # keep the run going; report the attempt as ERROR
-        error = f"{type(e).__name__}: {e}"
-        traceback.print_exc()
+    for try_no in range(1, MODEL_RETRIES + 2):
+        try:
+            result = agent(prompt)
+            final_text = str(result).strip()
+            error = None
+            break
+        except Exception as e:  # keep the run going; retry transient model errors, else report ERROR
+            error = f"{type(e).__name__}: {e}"
+            if try_no <= MODEL_RETRIES and _is_transient(e):
+                hook.calls.clear()
+                sandbox.__init__()
+                session = _session_for(scenario, sandbox)
+                hook.session = session
+                agent = build_target_agent(spec, model, hook, sandbox, tools=tools)
+                time.sleep(1.5 * try_no)
+                continue
+            traceback.print_exc()
     v = judge_attempt(spec, scenario, hook.calls, mode, error)
     return {
         "attempt": attempt_no,
