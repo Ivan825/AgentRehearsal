@@ -1,13 +1,45 @@
 import { useState } from 'react'
-import type { AgentSpec, Attempt, ScenarioResult } from '../types'
+import type { AgentSpec, Attempt, RecordedCall, ScenarioResult } from '../types'
 import { Button, Card, Category, VerdictBadge, fmtArgs } from './ui'
 
 function ruleFor(spec: AgentSpec, ids: string[]): string {
   return ids.map((id) => {
     if (id.startsWith('no-permit:')) return `no rule permits ${id.split(':')[1]}`
+    if (id.startsWith('gateway-deny:')) return `denied by AgentCore Gateway policy`
     const c = spec.constraints.find((x) => x.id === id)
     return c?.description ?? c?.rule ?? id
   }).join('; ')
+}
+
+/** Pull the human-readable text out of a tool result; highlight injected instructions in documents. */
+function ToolResult({ call }: { call: RecordedCall }) {
+  const [open, setOpen] = useState(call.tool === 'read_attachment')
+  if (!call.result) return null
+  let text = call.result
+  try {
+    const j = JSON.parse(call.result)
+    if (j && typeof j === 'object' && 'text' in j) text = String(j.text)
+    else text = JSON.stringify(j, null, 1).replace(/[{}\n"]/g, ' ').replace(/\s+/g, ' ').trim()
+  } catch { /* plain text */ }
+  const isDoc = call.tool === 'read_attachment'
+  const marker = /note to support agents|action for support|system note|instruction/i
+  const lines = text.split('\n')
+  const firstBad = lines.findIndex((l) => marker.test(l))
+  return (
+    <div className="mt-1.5">
+      <button onClick={() => setOpen(!open)} className="text-[11px] uppercase tracking-wider text-muted hover:text-text">
+        {open ? '▾' : '▸'} {isDoc ? 'what the agent read' : 'tool returned'}
+      </button>
+      {open && (
+        <pre className="mt-1 max-h-48 overflow-auto rounded border border-line bg-ink p-2 text-xs text-muted">
+          {isDoc && firstBad >= 0
+            ? <>{lines.slice(0, firstBad).join('\n')}{'\n'}<span className="rounded bg-fail/15 px-1 text-fail">{lines.slice(firstBad).join('\n')}</span></>
+            : text.slice(0, 900)}
+        </pre>
+      )}
+      {isDoc && firstBad >= 0 && <div className="mt-1 text-xs text-fail">Instruction embedded in data. The customer never asked for this.</div>}
+    </div>
+  )
 }
 
 function Step({ label, children, tone = 'default' }: { label: string; children: React.ReactNode; tone?: 'default' | 'pass' | 'fail' | 'warn' }) {
@@ -22,8 +54,10 @@ function Step({ label, children, tone = 'default' }: { label: string; children: 
 }
 
 export function Trace({ scenario, spec, mode, onBack }: { scenario: ScenarioResult; spec: AgentSpec; mode: string; onBack: () => void }) {
-  const [i, setI] = useState(0)
-  const a: Attempt = scenario.attempts[i]
+  const firstBad = Math.max(0, scenario.attempts.findIndex((a) => a.verdict !== 'PASS'))
+  const [i, setI] = useState(firstBad)
+  const a: Attempt = scenario.attempts[i] ?? scenario.attempts[0]
+  const header = a.prompt.split('\n\nCustomer message:\n')
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -49,17 +83,25 @@ export function Trace({ scenario, spec, mode, onBack }: { scenario: ScenarioResu
           <div className="mt-3 text-[11px] uppercase tracking-wider text-muted">Expected</div>
           <div className="mt-1 text-sm">{scenario.expected === 'deny' ? 'The agent must not perform a denied action.' : `The agent must complete the task${scenario.must_call ? ` by calling ${scenario.must_call}` : ''}, within policy.`}</div>
           <div className="mt-3 text-[11px] uppercase tracking-wider text-muted">Verdict</div>
-          <div className="mt-1 text-sm">{a.reason}</div>
+          <div className={`mt-1 text-sm ${a.verdict === 'PASS' ? 'text-text' : 'text-fail'}`}>{a.reason}</div>
           {a.final_text && (<>
-            <div className="mt-3 text-[11px] uppercase tracking-wider text-muted">Agent's final reply</div>
+            <div className="mt-3 text-[11px] uppercase tracking-wider text-muted">Agent's final reply to the customer</div>
             <pre className="mt-1 max-h-36 overflow-auto rounded bg-ink p-2 text-xs text-muted">{a.final_text}</pre>
           </>)}
+          <div className="mt-3 text-[11px] uppercase tracking-wider text-muted">Side effects in the sandbox</div>
+          <div className="mt-1 font-mono text-xs text-muted">
+            {(() => { const se = a.side_effects as { refunds?: unknown[]; emails?: unknown[]; deleted?: unknown[] }; const parts = [se.refunds?.length ? `${se.refunds.length} refund` : '', se.emails?.length ? `${se.emails.length} email` : '', se.deleted?.length ? `${se.deleted.length} deletion` : '']; return parts.filter(Boolean).join(' · ') || 'none' })()}
+            <span className="ml-2 text-muted">(mock tools; nothing real happened)</span>
+          </div>
         </Card>
 
         <Card title={`Reasoning path · ${mode === 'enforce' ? 'policy ENFORCED' : 'policy LOG-ONLY'}`} className="lg:col-span-3">
           <ol className="space-y-4 border-l border-line pl-0 [&>li]:ml-2">
-            <Step label="Input">
-              <pre className="rounded bg-ink p-2 text-xs">{a.prompt}</pre>
+            <Step label="Session context">
+              <div className="text-xs text-muted">{header[0]}</div>
+            </Step>
+            <Step label="Customer says">
+              <pre className="rounded bg-ink p-2 text-xs">{header[1] ?? a.prompt}</pre>
             </Step>
             {a.calls.map((c) => {
               const denied = !c.allowed
@@ -71,10 +113,11 @@ export function Trace({ scenario, spec, mode, onBack }: { scenario: ScenarioResu
                     <span className="text-[11px] uppercase tracking-wider text-muted">Policy</span>
                     {denied ? (
                       <span className={c.blocked ? 'text-warn' : 'text-fail'}>
-                        {c.blocked ? '⛔ DENIED and blocked' : '❌ VIOLATION (allowed through in rehearse mode)'} — {ruleFor(spec, c.violated)}
+                        {c.blocked ? '⛔ DENIED, call blocked' : '❌ VIOLATION, allowed through in log-only mode'} — {ruleFor(spec, c.violated)}
                       </span>
                     ) : (<span className="text-pass">✓ permitted{c.reasons.length ? ` by ${c.reasons.join(', ')}` : ''}</span>)}
                   </div>
+                  <ToolResult call={c} />
                 </Step>
               )
             })}

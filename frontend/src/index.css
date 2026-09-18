@@ -1,22 +1,54 @@
 @import "tailwindcss";
 
-@theme {
+/* Theme tokens. Dark = green on near-black, light = green on white. Switched with data-theme on <html>. */
+:root {
+  --c-ink: #050807;
+  --c-panel: #0b100d;
+  --c-panel-2: #111a15;
+  --c-line: #1e2b23;
+  --c-muted: #86998c;
+  --c-text: #e6efe9;
+  --c-pass: #34d399;
+  --c-fail: #f87171;
+  --c-warn: #fbbf24;
+  --c-accent: #22c55e;
+  --c-accent-ink: #04120a;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --c-ink: #ffffff;
+  --c-panel: #f7faf8;
+  --c-panel-2: #eef4f0;
+  --c-line: #d9e5dd;
+  --c-muted: #5f7167;
+  --c-text: #0b1610;
+  --c-pass: #15803d;
+  --c-fail: #dc2626;
+  --c-warn: #b45309;
+  --c-accent: #16a34a;
+  --c-accent-ink: #ffffff;
+  color-scheme: light;
+}
+
+@theme inline {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
-  --color-ink: #0b0f14;
-  --color-panel: #121820;
-  --color-panel-2: #182130;
-  --color-line: #243044;
-  --color-muted: #8b9bb4;
-  --color-text: #e6edf7;
-  --color-pass: #2fbf71;
-  --color-fail: #ef5350;
-  --color-warn: #f2b134;
-  --color-accent: #6ea8fe;
+  --color-ink: var(--c-ink);
+  --color-panel: var(--c-panel);
+  --color-panel-2: var(--c-panel-2);
+  --color-line: var(--c-line);
+  --color-muted: var(--c-muted);
+  --color-text: var(--c-text);
+  --color-pass: var(--c-pass);
+  --color-fail: var(--c-fail);
+  --color-warn: var(--c-warn);
+  --color-accent: var(--c-accent);
+  --color-accent-ink: var(--c-accent-ink);
 }
 
 html, body, #root { height: 100%; }
-body { background: var(--color-ink); color: var(--color-text); font-family: var(--font-sans); }
+body { background: var(--c-ink); color: var(--c-text); font-family: var(--font-sans); }
 code, pre, .mono { font-family: var(--font-mono); }
 pre { white-space: pre-wrap; word-break: break-word; }
-::selection { background: #2b4a7a; }
+::selection { background: color-mix(in srgb, var(--c-accent) 35%, transparent); }
+input[type="checkbox"] { accent-color: var(--c-accent); }

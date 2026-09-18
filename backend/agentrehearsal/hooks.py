@@ -8,6 +8,7 @@ This is the local twin of AgentCore Policy's LOG_ONLY and ENFORCE modes.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -30,6 +31,7 @@ class RecordedCall:
     violated: list[str]
     reasons: list[str]
     t: float
+    result: str = ""            # what the tool returned (truncated), so the trace can show what the agent saw
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -40,6 +42,7 @@ class RecordedCall:
             "blocked": self.blocked,
             "violated": self.violated,
             "reasons": self.reasons,
+            "result": self.result,
         }
 
 
@@ -76,16 +79,27 @@ class RecordingHook(HookProvider):
             event.cancel_tool = f"Denied by policy ({why}). This action is outside what this agent is allowed to do."
 
     def after_tool_call(self, event: AfterToolCallEvent) -> None:
-        """In observe mode an external policy engine (AgentCore Gateway) may have denied the call. Detect it."""
-        if self.mode != "observe" or not self.calls:
+        """Record what the tool returned; in observe mode also detect a deny made by an external policy engine."""
+        if not self.calls:
             return
         rec = self.calls[-1]
         text = ""
+        status = ""
         try:
-            text = " ".join(str(b.get("text", "")) for b in event.result.get("content", []) if isinstance(b, dict))
+            parts = []
+            for b in event.result.get("content", []) or []:
+                if isinstance(b, dict):
+                    if "text" in b:
+                        parts.append(str(b["text"]))
+                    elif "json" in b:
+                        parts.append(json.dumps(b["json"], default=str))
+            text = " ".join(parts)
             status = event.result.get("status", "")
         except Exception:
-            status = ""
+            pass
+        rec.result = text[:1500]
+        if self.mode != "observe":
+            return
         if status == "error" or "denied" in text.lower() or "not authorized" in text.lower() or "accessdenied" in text.lower().replace(" ", ""):
             rec.blocked = True
             rec.allowed = False if rec.allowed else rec.allowed

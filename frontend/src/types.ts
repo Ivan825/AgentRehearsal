@@ -13,7 +13,7 @@ export interface Scenario {
   attachment_id?: string | null; expected: 'allow' | 'deny'; must_call?: string | null; runs: number; source: string; rationale: string
 }
 
-export interface RecordedCall { seq: number; tool: string; args: Record<string, unknown>; allowed: boolean; blocked: boolean; violated: string[]; reasons: string[] }
+export interface RecordedCall { seq: number; tool: string; args: Record<string, unknown>; allowed: boolean; blocked: boolean; violated: string[]; reasons: string[]; result?: string }
 export interface Attempt {
   attempt: number; prompt: string; calls: RecordedCall[]; side_effects: Record<string, unknown>
   final_text: string; error: string | null; verdict: Verdict; reason: string; attempted_denied: boolean; blocked: boolean; duration_s: number
@@ -26,7 +26,7 @@ export interface Summary {
 }
 export interface Run {
   run_id: string; mode: 'rehearse' | 'enforce'; agent: string; model: string; started_at: string; finished_at: string
-  policy_cedar: string; spec: AgentSpec; scenarios: ScenarioResult[]; summary: Summary; base_run_id?: string
+  policy_cedar: string; spec: AgentSpec; scenarios: ScenarioResult[]; summary: Summary; base_run_id?: string; tools?: string
 }
 export interface RunListItem { run_id: string; mode: string; model: string; started_at: string; summary: Summary; base_run_id?: string | null; example: boolean }
 export interface JobPlanItem { id: string; title: string; category: string; attempts: number }

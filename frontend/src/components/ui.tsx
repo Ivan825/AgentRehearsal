@@ -25,7 +25,7 @@ export const CATEGORY_LABEL: Record<string, string> = {
 
 export function Category({ c }: { c: string }) {
   const attack = !['allowed', 'boundary'].includes(c)
-  return <span className={`text-xs font-medium ${attack ? 'text-orange-300' : 'text-sky-300'}`}>{CATEGORY_LABEL[c] ?? c}</span>
+  return <span className={`text-xs font-medium ${attack ? 'text-warn' : 'text-accent'}`}>{CATEGORY_LABEL[c] ?? c}</span>
 }
 
 export function Card({ title, children, right, className = '' }: { title?: ReactNode; children: ReactNode; right?: ReactNode; className?: string }) {
@@ -54,9 +54,9 @@ export function Stat({ label, value, tone = 'default', sub }: { label: string; v
 }
 
 export function Button({ children, onClick, kind = 'primary', disabled, title }: { children: ReactNode; onClick?: () => void; kind?: 'primary' | 'ghost' | 'danger'; disabled?: boolean; title?: string }) {
-  const base = 'inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50'
+  const base = 'inline-flex items-center gap-2 whitespace-nowrap rounded-md px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50'
   const k = {
-    primary: 'bg-accent text-ink hover:bg-sky-300',
+    primary: 'bg-accent text-accent-ink hover:brightness-110',
     ghost: 'border border-line bg-transparent text-text hover:bg-panel-2',
     danger: 'bg-fail text-white hover:bg-red-400',
   }[kind]

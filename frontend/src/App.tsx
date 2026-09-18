@@ -32,6 +32,13 @@ export default function App() {
   const [selected, setSelected] = useState<ScenarioResult | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const poll = useRef<number | null>(null)
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try { return (localStorage.getItem('ar-theme') as 'dark' | 'light') || 'dark' } catch { return 'dark' }
+  })
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try { localStorage.setItem('ar-theme', theme) } catch { /* ignore */ }
+  }, [theme])
 
   const refreshRuns = useCallback(() => api.runs().then((r) => setRuns(r.runs)).catch(() => {}), [])
 
@@ -91,13 +98,13 @@ export default function App() {
         <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3">
           <div className="flex items-center gap-2.5">
             <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
-              <rect x="1.5" y="1.5" width="27" height="27" rx="7" fill="none" stroke="#6ea8fe" strokeWidth="2" />
-              <path d="M9 16.5 L13 20.5 L21 10.5" fill="none" stroke="#2fbf71" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-              <circle cx="21.5" cy="21" r="3.2" fill="#0b0f14" stroke="#ef5350" strokeWidth="2" />
+              <rect x="1.5" y="1.5" width="27" height="27" rx="7" fill="none" stroke="var(--c-accent)" strokeWidth="2" />
+              <path d="M9 16.5 L13 20.5 L21 10.5" fill="none" stroke="var(--c-accent)" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="21.5" cy="21" r="3.2" fill="var(--c-ink)" stroke="var(--c-fail)" strokeWidth="2" />
             </svg>
             <div>
               <div className="text-base font-bold tracking-tight">AgentRehearsal</div>
-              <div className="text-[11px] text-muted">Crash-test your AI agent before your users do.</div>
+              <div className="hidden text-[11px] text-muted xl:block">Crash-test your AI agent before your users do.</div>
             </div>
           </div>
           <nav className="flex items-center gap-1">
@@ -108,6 +115,9 @@ export default function App() {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Toggle theme" className="rounded-md border border-line px-2.5 py-1.5 text-xs text-muted hover:text-text">
+              {theme === 'dark' ? '☀' : '☾'}
+            </button>
             <select value={model} onChange={(e) => setModel(e.target.value as 'bedrock' | 'scripted')} className="rounded border border-line bg-panel-2 px-2 py-1.5 text-xs">
               <option value="bedrock">Target model: Bedrock</option>
               <option value="scripted">Target model: scripted (offline sim)</option>

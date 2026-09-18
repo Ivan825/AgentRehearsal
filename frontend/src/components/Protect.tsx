@@ -8,11 +8,19 @@ export function Protect({ run, cedar, onCedar, onReplay, busy }: { run: Run | nu
   useEffect(() => { api.validatePolicy(cedar).then((r) => setProblems(r.problems)).catch(() => {}) }, [cedar])
 
   const findings = run?.scenarios.filter((s) => s.verdict !== 'PASS') ?? []
-  const fixes = new Map<string, { rule: string; tool: string; finding: string }>()
-  for (const s of findings) for (const a of s.attempts) for (const c of a.calls) if (!c.allowed) for (const v of c.violated) {
-    const con = run!.spec.constraints.find((x) => x.id === v)
-    fixes.set(v, { rule: con?.description ?? con?.rule ?? v, tool: c.tool, finding: s.title })
+  const fixes = new Map<string, { rule: string; tool: string; findings: string[] }>()
+  for (const s of findings) {
+    const ids = new Set<string>()
+    for (const a of s.attempts) for (const c of a.calls) if (!c.allowed) for (const v of c.violated) ids.add(v + '|' + c.tool)
+    for (const key of ids) {
+      const [v, tool] = key.split('|')
+      const con = run!.spec.constraints.find((x) => x.id === v)
+      const cur = fixes.get(v) ?? { rule: con?.description ?? con?.rule ?? v, tool, findings: [] }
+      cur.findings.push(s.id)
+      fixes.set(v, cur)
+    }
   }
+  const total = run?.scenarios.length ?? 0
 
   return (
     <div className="grid gap-4 lg:grid-cols-5">
@@ -22,17 +30,27 @@ export function Protect({ run, cedar, onCedar, onReplay, busy }: { run: Run | nu
         <ul className="space-y-2">
           {[...fixes.entries()].map(([id, f]) => (
             <li key={id} className="rounded border border-line bg-panel-2 p-2.5 text-sm">
-              <div className="font-medium">{f.rule}</div>
-              <div className="mt-0.5 text-xs text-muted">Restrict <code className="text-accent">{f.tool}</code> · found by “{f.finding}” · <span className="font-mono">{id}</span></div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-medium">{f.rule}</div>
+                <span className="shrink-0 rounded bg-fail/15 px-1.5 py-0.5 font-mono text-[10px] text-fail">{f.findings.length} finding{f.findings.length === 1 ? '' : 's'}</span>
+              </div>
+              <div className="mt-0.5 text-xs text-muted">Restrict <code className="text-accent">{f.tool}</code> · {f.findings.join(', ')} · <span className="font-mono">{id}</span></div>
             </li>
           ))}
         </ul>
-        <div className="mt-4 rounded border border-line bg-ink p-3 text-xs text-muted">
+        <div className="mt-4 flex items-center gap-3 rounded border border-line bg-ink p-3">
+          <div className="text-[11px] uppercase tracking-wider text-muted">Policy mode</div>
+          <span className="rounded border border-warn/40 bg-warn/15 px-2 py-0.5 font-mono text-xs text-warn">LOG_ONLY</span>
+          <span className="text-muted">→</span>
+          <span className={`rounded border px-2 py-0.5 font-mono text-xs ${busy ? 'border-pass/40 bg-pass/15 text-pass' : 'border-line text-muted'}`}>ENFORCE</span>
+          <span className="ml-auto text-[11px] text-muted">{run?.tools === 'gateway' ? 'AgentCore Gateway' : 'Strands hook'}</span>
+        </div>
+        <div className="mt-3 rounded border border-line bg-ink p-3 text-xs text-muted">
           <div className="font-semibold text-text">How enforcement works</div>
           <p className="mt-1">Every tool call passes through a policy decision point before it runs. Locally that is a Strands hook evaluating this Cedar policy; on AWS it is AgentCore Gateway with Policy in ENFORCE mode. Same policy text, same decision, and the model never gets a vote.</p>
         </div>
         <div className="mt-4 flex items-center gap-3">
-          <Button onClick={onReplay} disabled={busy || problems.length > 0 || !run}>{busy ? 'Replaying…' : 'Apply protection & replay failed tests'}</Button>
+          <Button onClick={onReplay} disabled={busy || problems.length > 0 || !run}>{busy ? 'Replaying…' : `Apply protection & replay all ${total || ''} scenarios`}</Button>
         </div>
       </Card>
       <Card title="Cedar policy" className="lg:col-span-3" right={problems.length ? <span className="text-xs text-fail">does not parse</span> : <span className="text-xs text-pass">parses ✓</span>}>

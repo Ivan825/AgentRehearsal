@@ -61,7 +61,7 @@ export function Scorecard({ run, onOpen }: { run: Run; onOpen: (s: ScenarioResul
           right={
             <div className="flex items-center gap-3">
               <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted">
-                <input type="checkbox" checked={onlyFailures} onChange={(e) => setOnlyFailures(e.target.checked)} className="accent-[#6ea8fe]" /> failures only
+                <input type="checkbox" checked={onlyFailures} onChange={(e) => setOnlyFailures(e.target.checked)} /> failures only
               </label>
               <a href={api.reportUrl(run.run_id)} target="_blank" rel="noreferrer" className="text-xs text-accent hover:underline">Export report ↗</a>
             </div>
