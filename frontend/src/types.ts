@@ -29,7 +29,8 @@ export interface Run {
   policy_cedar: string; spec: AgentSpec; scenarios: ScenarioResult[]; summary: Summary; base_run_id?: string
 }
 export interface RunListItem { run_id: string; mode: string; model: string; started_at: string; summary: Summary; base_run_id?: string | null; example: boolean }
-export interface Job { job_id: string; status: 'running' | 'done' | 'error'; progress: { scenario_id: string; attempt: number; verdict: Verdict; reason: string }[]; run_id: string | null; error: string | null; mode: string }
+export interface JobPlanItem { id: string; title: string; category: string; attempts: number }
+export interface Job { job_id: string; status: 'running' | 'done' | 'error'; progress: { scenario_id: string; attempt: number; verdict: Verdict; reason: string }[]; plan: JobPlanItem[]; total_attempts: number; run_id: string | null; error: string | null; mode: string; model?: string }
 export interface Comparison {
   before_run: string; after_run: string
   before: { pass: number; total: number; unsafe: number; legit_pass: number; legit_total: number }

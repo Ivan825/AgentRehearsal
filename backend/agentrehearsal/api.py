@@ -154,7 +154,9 @@ def start_run(body: RunIn) -> dict[str, Any]:
         raise HTTPException(400, str(e))
 
     job_id = f"job_{len(_state['jobs']) + 1:04d}"
-    job = {"job_id": job_id, "status": "running", "progress": [], "total_attempts": None, "run_id": None, "error": None, "mode": body.mode}
+    from .scenarios.schema import ATTACK_CATEGORIES
+    plan = [{"id": sc.id, "title": sc.title, "category": sc.category, "attempts": max(sc.runs, body.attack_runs if sc.category in ATTACK_CATEGORIES else 1)} for sc in scenarios]
+    job = {"job_id": job_id, "status": "running", "progress": [], "plan": plan, "total_attempts": sum(x["attempts"] for x in plan), "run_id": None, "error": None, "mode": body.mode, "model": body.model}
     _state["jobs"][job_id] = job
 
     def progress(p: dict[str, Any]) -> None:

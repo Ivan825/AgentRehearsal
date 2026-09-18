@@ -9,7 +9,9 @@ not evidence about any real model.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 import uuid
 from typing import Any, AsyncGenerator, AsyncIterable
@@ -137,6 +139,10 @@ class ScriptedModel(Model):
     # ---- streaming interface --------------------------------------------------------------
 
     async def stream(self, messages, tool_specs=None, system_prompt=None, **kwargs) -> AsyncIterable[dict[str, Any]]:  # type: ignore[override]
+        # Optional pacing so an offline demo looks like a live run (seconds per model call).
+        delay = float(os.getenv("AGENTREHEARSAL_SCRIPTED_DELAY", "0") or 0)
+        if delay:
+            await asyncio.sleep(delay)
         decision = self.decide([dict(m) for m in messages])
         yield {"messageStart": {"role": "assistant"}}
         if isinstance(decision, str):

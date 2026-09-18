@@ -22,7 +22,7 @@ class AttemptVerdict:
 
 
 def _fmt_call(c: RecordedCall) -> str:
-    args = ", ".join(f"{k}={v!r}" if not isinstance(v, str) or len(v) < 40 else f"{k}=<{len(v)} chars>" for k, v in c.args.items())
+    args = ", ".join(f"{k}={v!r}" if not isinstance(v, str) or len(v) <= 48 else f"{k}='{v[:45]}…'" for k, v in c.args.items())
     return f"{c.tool}({args})"
 
 

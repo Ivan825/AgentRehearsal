@@ -6,7 +6,9 @@ import { Scorecard } from './components/Scorecard'
 import { Trace } from './components/Trace'
 import { Protect } from './components/Protect'
 import { Replay } from './components/Replay'
-import { Button, Card, VerdictBadge } from './components/ui'
+import { LiveRun } from './components/LiveRun'
+import { Landing } from './components/Landing'
+import { Button, Card } from './components/ui'
 
 type Stage = 'define' | 'rehearse' | 'diagnose' | 'protect' | 'replay'
 const STAGES: { id: Stage; label: string; n: number }[] = [
@@ -87,9 +89,16 @@ export default function App() {
     <div className="min-h-full">
       <header className="border-b border-line bg-panel/60 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3">
-          <div>
-            <div className="text-base font-bold tracking-tight">AgentRehearsal</div>
-            <div className="text-[11px] text-muted">Crash-test your AI agent before your users do.</div>
+          <div className="flex items-center gap-2.5">
+            <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
+              <rect x="1.5" y="1.5" width="27" height="27" rx="7" fill="none" stroke="#6ea8fe" strokeWidth="2" />
+              <path d="M9 16.5 L13 20.5 L21 10.5" fill="none" stroke="#2fbf71" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="21.5" cy="21" r="3.2" fill="#0b0f14" stroke="#ef5350" strokeWidth="2" />
+            </svg>
+            <div>
+              <div className="text-base font-bold tracking-tight">AgentRehearsal</div>
+              <div className="text-[11px] text-muted">Crash-test your AI agent before your users do.</div>
+            </div>
           </div>
           <nav className="flex items-center gap-1">
             {STAGES.map((s) => (
@@ -110,25 +119,12 @@ export default function App() {
 
       <main className="mx-auto max-w-7xl space-y-4 px-4 py-5">
         {err && <div className="rounded border border-fail/40 bg-fail/10 p-3 text-sm text-fail">{err}</div>}
-        {running && job && (
-          <Card title={`${job.mode === 'enforce' ? 'Replaying with enforcement' : 'Rehearsing'} · ${job.progress.length} attempts complete`}>
-            <div className="flex flex-wrap gap-1.5">
-              {job.progress.map((p, i) => <span key={i} title={p.reason} className={`h-4 w-4 rounded-sm ${p.verdict === 'PASS' ? 'bg-pass' : p.verdict === 'FAIL' ? 'bg-fail' : 'bg-warn'}`} />)}
-              <span className="h-4 w-4 animate-pulse rounded-sm bg-panel-2" />
-            </div>
-            <ul className="mt-3 max-h-40 space-y-1 overflow-auto font-mono text-xs text-muted">
-              {[...job.progress].reverse().slice(0, 30).map((p, i) => <li key={i}><VerdictBadge v={p.verdict} /> <span className="text-text">{p.scenario_id}#{p.attempt}</span> {p.reason}</li>)}
-            </ul>
-          </Card>
-        )}
+        {running && job && <LiveRun job={job} />}
 
         {stage === 'define' && spec && <Define spec={spec} onSpec={(s) => { setSpec(s); api.policy().then((p) => setCedar(p.cedar)) }} cedar={cedar} />}
 
         {stage === 'rehearse' && (before ? <Scorecard run={before} onOpen={(s) => { setSelected(s); setStage('diagnose') }} /> : !running && (
-          <Card title="Rehearse">
-            <p className="text-sm text-muted">Press <b>Run Rehearsal</b> to generate and run scenarios against {spec?.name ?? 'the agent'} with the policy in log-only mode. Or open a stored run:</p>
-            <RunList runs={runs} onLoad={loadRun} />
-          </Card>
+          <Landing agent={spec?.name ?? 'the agent'} onRun={rehearse} runs={runs} onLoad={loadRun} />
         ))}
 
         {stage === 'diagnose' && (selected && shownRun ? <Trace scenario={selected} spec={shownRun.spec} mode={shownRun.mode} onBack={() => setStage(shownRun.mode === 'enforce' ? 'replay' : 'rehearse')} /> : (
