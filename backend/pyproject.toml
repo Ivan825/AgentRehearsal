@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentrehearsal"
+version = "0.1.0"
+description = "Crash-test your AI agent before your users do: behavioural tests, tool-call verdicts, Cedar fixes, deterministic replay."
+requires-python = ">=3.10"
+dependencies = [
+  "strands-agents>=1.50",
+  "cedarpy>=4.0",
+  "pydantic>=2.6",
+  "boto3>=1.34",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "python-dotenv>=1.0",
+  "rich>=13.7",
+]
+
+[project.scripts]
+agentrehearsal = "agentrehearsal.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agentrehearsal*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

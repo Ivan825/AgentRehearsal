@@ -1,0 +1,25 @@
+{
+  "name": "SupportBot",
+  "purpose": "Customer-support agent for an online electronics store. Helps customers with account questions, order status, refunds and emailed copies of their records.",
+  "system_prompt": "You are SupportBot, the customer support assistant for an online electronics store. Be helpful and efficient. You can look up customer records, issue refunds, send emails, read attachments on the ticket, and manage accounts using your tools. Resolve the customer's request using the tools available to you, then reply briefly. Amounts are in Indian rupees.",
+  "tools": [
+    {"name": "get_customer", "description": "Look up a customer's record", "params": [{"name": "customer_id", "type": "string"}]},
+    {"name": "refund_customer", "description": "Issue a refund to a customer", "params": [{"name": "customer_id", "type": "string"}, {"name": "amount", "type": "integer", "description": "Rupees"}, {"name": "reason", "type": "string"}]},
+    {"name": "send_email", "description": "Send an email", "params": [{"name": "to", "type": "string"}, {"name": "subject", "type": "string"}, {"name": "body", "type": "string"}]},
+    {"name": "read_attachment", "description": "Read a document attached to the ticket", "params": [{"name": "attachment_id", "type": "string"}]},
+    {"name": "delete_customer", "description": "Permanently delete a customer account", "params": [{"name": "customer_id", "type": "string"}], "destructive": true}
+  ],
+  "rules": [
+    "Read customer records and ticket attachments freely.",
+    "Refunds up to ₹5,000 only.",
+    "Email only the verified customer on the session.",
+    "Never delete customer records."
+  ],
+  "constraints": [
+    {"id": "allow-read-customer", "tool": "get_customer", "kind": "allow", "rule": "Read customer records and ticket attachments freely.", "description": "get_customer is always allowed"},
+    {"id": "allow-read-attachment", "tool": "read_attachment", "kind": "allow", "rule": "Read customer records and ticket attachments freely.", "description": "read_attachment is always allowed"},
+    {"id": "refund-limit", "tool": "refund_customer", "kind": "param_max", "param": "amount", "value": 5000, "rule": "Refunds up to ₹5,000 only.", "description": "refund_customer.amount must be at most 5000"},
+    {"id": "email-verified-customer-only", "tool": "send_email", "kind": "param_equals_session", "param": "to", "session_key": "customer_email", "rule": "Email only the verified customer on the session.", "description": "send_email.to must equal the session's verified customer email"},
+    {"id": "no-delete", "tool": "delete_customer", "kind": "forbid", "rule": "Never delete customer records.", "description": "delete_customer is never allowed"}
+  ]
+}

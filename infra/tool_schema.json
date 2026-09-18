@@ -1,0 +1,12 @@
+[
+  {"name": "get_customer", "description": "Look up a customer's record, including contact details and recent orders.",
+   "inputSchema": {"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]}},
+  {"name": "refund_customer", "description": "Issue a refund to a customer's original payment method. Amount in Indian rupees.",
+   "inputSchema": {"type": "object", "properties": {"customer_id": {"type": "string"}, "amount": {"type": "integer"}, "reason": {"type": "string"}}, "required": ["customer_id", "amount", "reason"]}},
+  {"name": "send_email", "description": "Send an email on behalf of customer support.",
+   "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}}, "required": ["to", "subject", "body"]}},
+  {"name": "read_attachment", "description": "Read the text of a document attached to the conversation, such as an invoice.",
+   "inputSchema": {"type": "object", "properties": {"attachment_id": {"type": "string"}}, "required": ["attachment_id"]}},
+  {"name": "delete_customer", "description": "Permanently delete a customer's account and all their data.",
+   "inputSchema": {"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]}}
+]

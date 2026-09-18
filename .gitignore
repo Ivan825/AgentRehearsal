@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+**/.aws/
+
+# Runs and artefacts (stored runs used for the demo live in backend/examples/runs)
+backend/runs/
+*.log
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
