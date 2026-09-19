@@ -26,7 +26,6 @@ export default function App() {
   const [spec, setSpec] = useState<AgentSpec | null>(null)
   const [cedar, setCedar] = useState('')
   const [model, setModel] = useState<'bedrock' | 'scripted'>('bedrock')
-  const [models, setModels] = useState<{ id: string; label: string; note?: string }[]>([])
   const [modelId, setModelId] = useState<string>(() => { try { return localStorage.getItem('ar-model') || '' } catch { return '' } })
   useEffect(() => { try { localStorage.setItem('ar-model', modelId) } catch { /* ignore */ } }, [modelId])
   const [runs, setRuns] = useState<RunListItem[]>([])
@@ -47,7 +46,7 @@ export default function App() {
   useEffect(() => {
     api.spec().then(setSpec).catch((e) => setErr(String(e)))
     api.policy().then((p) => setCedar(p.cedar)).catch(() => {})
-    api.models().then((m) => { setModels(m.models); setModelId((cur) => cur || m.default) }).catch(() => {})
+    api.models().then((m) => setModelId((cur) => cur || m.default)).catch(() => {})
     refreshRuns()
   }, [refreshRuns])
 
@@ -135,7 +134,7 @@ export default function App() {
   const next = !hasConstraints
     ? { text: 'Define the agent: load an example or parse your own rules into constraints.', action: () => setStage('define'), label: 'Open Define' }
     : !before
-      ? { text: `Rehearse: run every scenario against ${spec?.name ?? 'the agent'} with the policy in log-only mode.`, action: rehearse, label: '▶ Run Rehearsal' }
+      ? { text: `Rehearse: run every scenario on the Define tab (seeds plus anything Bedrock authored) against ${spec?.name ?? 'the agent'} with the policy in log-only mode.`, action: rehearse, label: '▶ Run Rehearsal' }
       : !after
         ? { text: `${before.summary.attacks_unsafe} of ${before.summary.attacks_total} attacks got through. Protect compiles the findings into a Cedar policy; replay proves it blocks them.`, action: () => setStage('protect'), label: 'Open Protect' }
         : !holdout
@@ -168,11 +167,6 @@ export default function App() {
               {theme === 'dark' ? '☀' : '☾'}
             </button>
             {user && <button onClick={() => { session.clear(); nav('/') }} className="rounded-md border border-line px-2.5 py-1.5 text-xs text-muted hover:text-text">Sign out</button>}
-            <div className="hidden items-center gap-2 rounded border border-line bg-panel-2 px-2 py-1.5 text-xs md:flex" title="Set on the Define tab">
-              <span className="text-muted">Agent</span><span className="font-semibold">{spec?.name ?? '…'}</span>
-              <span className="text-muted">on</span>
-              <span className="font-mono">{spec?.target?.kind === 'http' ? 'external · HTTP' : spec?.target?.kind === 'agentcore_runtime' ? 'external · AgentCore' : (models.find((m) => m.id === (spec?.model_id || modelId))?.label ?? spec?.model_id ?? modelId ?? 'default')}</span>
-            </div>
             <label className="flex items-center gap-1.5 rounded border border-line px-2 py-1.5 text-xs text-muted" title="Offline simulation of a naive agent (no AWS). Models the SupportBot example only.">
               <input type="checkbox" checked={model === 'scripted'} onChange={(e) => setModel(e.target.checked ? 'scripted' : 'bedrock')} /> offline sim
             </label>

@@ -98,7 +98,7 @@ function ScenarioRow({ s, onRemove }: { s: Scenario; onRemove: () => void }) {
 }
 
 export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: AgentSpec) => void; cedar: string }) {
-  const [models, setModels] = useState<{ id: string; label: string; note?: string }[]>([])
+  const [models, setModels] = useState<{ id: string; label: string; note?: string; provider?: string; available?: boolean }[]>([])
   const [mcp, setMcp] = useState<{ url: string; token: string } | null>(null)
   const [examples, setExamples] = useState<Example[]>([])
   useEffect(() => { api.models().then((m) => setModels(m.models)).catch(() => {}); api.workspaceMcp().then(setMcp).catch(() => {}); api.examples().then((r) => setExamples(r.examples)).catch(() => {}) }, [])
@@ -113,9 +113,20 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
   const dirty = JSON.stringify(draft) !== JSON.stringify(spec) || rules !== spec.rules.join('\n')
 
   useEffect(() => { setDraft(spec); setRules(spec.rules.join('\n')) }, [spec])
-  useEffect(() => { api.scenarios().then((r) => setScenarios(r.scenarios)).catch(() => {}) }, [])
+  useEffect(() => {
+    const sync = () => api.scenarios().then((r) => setScenarios(r.scenarios)).catch(() => {})
+    sync()
+    window.addEventListener('focus', sync)   // another tab or teammate may have changed the list
+    return () => window.removeEventListener('focus', sync)
+  }, [])
 
   const set = (patch: Partial<AgentSpec>) => setDraft({ ...draft, ...patch })
+  // the model is the one field that should never sit unsaved: a run picks it up from the server, not the draft
+  const setModel = (model_id: string) => {
+    const next = { ...draft, model_id }
+    setDraft(next)
+    api.saveSpec({ ...next, rules: rules.split('\n').map((s) => s.trim()).filter(Boolean) }).then(onSpec).catch((e) => setErr(String(e)))
+  }
   const run = async (name: string, fn: () => Promise<void>) => { setBusy(name); setErr(null); setMsg(null); try { await fn() } catch (e) { setErr(String(e)) } finally { setBusy(null) } }
 
   const save = () => run('save', async () => {
@@ -131,6 +142,8 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
     onSpec(next); setMsg(`Bedrock parsed ${constraints.length} constraints. Check them below, then save.`)
   })
   const loadExample = (id: string) => run('example', async () => {
+    const authored = scenarios.filter((s) => s.source !== 'seed').length
+    if (authored && !confirm(`Loading an example replaces the current agent and its ${scenarios.length} scenarios (${authored} authored by Bedrock). Export JSON first if you want to keep them. Continue?`)) return
     const r = await api.resetExample(id); onSpec(r.spec); const s = await api.scenarios(); setScenarios(s.scenarios)
     setMsg(r.scenarios ? `${r.example} loaded with ${r.scenarios} scenarios. Next: ▶ Run Rehearsal.` : `${r.example} loaded. It ships with no scenarios: press Generate with Bedrock to author them from the rules, then run the rehearsal.`)
   })
@@ -177,13 +190,14 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
           <textarea value={draft.purpose} onChange={(e) => set({ purpose: e.target.value })} rows={3} className={input} />
           <div className={`mt-3 ${label}`}>Model the agent runs on (Bedrock)</div>
           <div className="mt-1 flex gap-1">
-            <select value={models.some((m) => m.id === draft.model_id) ? draft.model_id : (draft.model_id ? '__custom' : '')} onChange={(e) => { if (e.target.value !== '__custom') set({ model_id: e.target.value }) }} className={input}>
+            <select value={models.some((m) => m.id === draft.model_id) ? draft.model_id : (draft.model_id ? '__custom' : '')} onChange={(e) => { if (e.target.value !== '__custom') setModel(e.target.value) }} className={input}>
               <option value="">Server default</option>
               {models.map((m) => <option key={m.id} value={m.id}>{m.label}{m.note ? ` · ${m.note}` : ''}</option>)}
               <option value="__custom">Custom id…</option>
             </select>
           </div>
-          <input value={draft.model_id} onChange={(e) => set({ model_id: e.target.value.trim() })} placeholder="or paste a model / inference profile id" className={`${input} mt-1 font-mono text-xs`} />
+          <input value={draft.model_id} onChange={(e) => set({ model_id: e.target.value.trim() })} onBlur={(e) => setModel(e.target.value.trim())} placeholder="or paste a model / inference profile id" className={`${input} mt-1 font-mono text-xs`} />
+          <div className="mt-1 text-[11px] text-muted">Applies immediately to the next run; no need to press Save.</div>
           <div className={`mt-3 ${label}`}>System prompt (the agent's own instructions)</div>
           <textarea value={draft.system_prompt} onChange={(e) => set({ system_prompt: e.target.value })} rows={8} className={`${input} font-mono text-xs`} />
           <details className="mt-3" open>
@@ -268,7 +282,7 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
           </details>
         </Card>
 
-      <Card title={`${scenarios.length} scenarios`} className="lg:col-span-3" right={
+      <Card title={`${scenarios.length} scenarios · ${scenarios.filter((s) => s.source === 'seed').length} seed, ${scenarios.filter((s) => s.source !== 'seed').length} authored by Bedrock`} className="lg:col-span-3" right={
         <div className="flex items-center gap-2">
           <button onClick={() => setShowAdd(!showAdd)} className="text-xs text-accent">+ add scenario</button>
           <Button kind="ghost" onClick={generate} disabled={!!busy}>{busy === 'gen' ? 'Authoring with Bedrock…' : 'Generate with Bedrock'}</Button>

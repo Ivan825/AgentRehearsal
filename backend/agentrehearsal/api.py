@@ -313,7 +313,7 @@ def generate_endpoint(body: GenerateIn, user: dict[str, Any] = auth.User) -> dic
             _persist(user)
         except Exception as e:
             job["status"] = "error"
-            job["error"] = f"scenario generation failed: {type(e).__name__}: {e}"
+            job["error"] = f"scenario generation failed: {type(e).__name__}: {e}" + ("  → the author model is retired on Bedrock; set AGENTREHEARSAL_AUTHOR_MODEL in backend/.env to an active one (e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0) and restart the API." if "Legacy" in str(e) else "")
 
     threading.Thread(target=work, daemon=True).start()
     return _public_job(job)
@@ -546,21 +546,24 @@ def contact(body: ContactIn) -> dict[str, Any]:
 
 
 CURATED_MODELS = [
-    {"id": "us.amazon.nova-micro-v1:0", "label": "Amazon Nova Micro", "note": "smallest, fails attacks most"},
-    {"id": "us.amazon.nova-lite-v1:0", "label": "Amazon Nova Lite", "note": "default"},
-    {"id": "us.amazon.nova-pro-v1:0", "label": "Amazon Nova Pro"},
-    {"id": "us.anthropic.claude-3-5-haiku-20241022-v1:0", "label": "Claude 3.5 Haiku"},
-    {"id": "us.anthropic.claude-sonnet-4-20250514-v1:0", "label": "Claude Sonnet 4"},
-    {"id": "us.meta.llama3-3-70b-instruct-v1:0", "label": "Llama 3.3 70B"},
+    {"id": "us.amazon.nova-micro-v1:0", "label": "Amazon Nova Micro", "note": "smallest, fails attacks most", "provider": "bedrock"},
+    {"id": "us.amazon.nova-lite-v1:0", "label": "Amazon Nova Lite", "note": "default", "provider": "bedrock"},
+    {"id": "us.amazon.nova-pro-v1:0", "label": "Amazon Nova Pro", "provider": "bedrock"},
+    {"id": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "label": "Claude Haiku 4.5", "provider": "bedrock"},
+    {"id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "label": "Claude Sonnet 4.5", "provider": "bedrock"},
+    {"id": "us.meta.llama3-3-70b-instruct-v1:0", "label": "Llama 3.3 70B", "provider": "bedrock"},
 ]
 
 
 @app.get("/api/models")
 def list_models(user: dict[str, Any] = auth.User) -> dict[str, Any]:
     """Models the target agent can run on: a curated list, plus the account's active inference profiles when reachable."""
+    from .models.factory import PROVIDERS, provider_available, split_model_id
+
     out = {m["id"]: dict(m) for m in CURATED_MODELS}
-    out[config.TARGET_MODEL_ID] = out.get(config.TARGET_MODEL_ID, {"id": config.TARGET_MODEL_ID, "label": config.TARGET_MODEL_ID})
+    out[config.TARGET_MODEL_ID] = out.get(config.TARGET_MODEL_ID, {"id": config.TARGET_MODEL_ID, "label": config.TARGET_MODEL_ID, "provider": split_model_id(config.TARGET_MODEL_ID)[0]})
     out[config.TARGET_MODEL_ID]["note"] = "default"
+    providers = [{"id": "bedrock", "label": PROVIDERS["bedrock"]["label"], "available": True, "env": None}]   # Bedrock only for now
     live = False
     try:
         import boto3
@@ -571,11 +574,14 @@ def list_models(user: dict[str, Any] = auth.User) -> dict[str, Any]:
                 continue
             pid = prof["inferenceProfileId"]
             if pid not in out and pid.startswith(("us.", "global.")):
-                out[pid] = {"id": pid, "label": prof.get("inferenceProfileName", pid)}
+                out[pid] = {"id": pid, "label": prof.get("inferenceProfileName", pid), "provider": "bedrock"}
         live = True
     except Exception as e:
         print(f"[models] live listing unavailable: {e}")
-    return {"models": list(out.values()), "default": config.TARGET_MODEL_ID, "live": live}
+    for m in out.values():
+        m.setdefault("provider", "bedrock")
+        m["available"] = provider_available(m["provider"])
+    return {"models": list(out.values()), "default": config.TARGET_MODEL_ID, "live": live, "providers": providers}
 
 
 @app.get("/")

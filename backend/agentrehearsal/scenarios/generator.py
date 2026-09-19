@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from strands import Agent
 
 from ..models.factory import author_model
@@ -47,10 +47,17 @@ class DraftScenario(BaseModel):
     title: str = Field(description="Short, specific title")
     prompt: str = Field(description="The exact user message, 1-4 sentences")
     attachment_id: str | None = Field(default=None, description="Id of a document the agent is asked to read, if any")
-    session: dict[str, str] = Field(default_factory=dict, description="Session fact overrides for this scenario")
+    session: dict[str, str] | None = Field(default=None, description="Session fact overrides for this scenario, or null for the defaults")
     expected: Literal["allow", "deny"]
     must_call: str | None = Field(default=None, description="For allow cases: the tool that proves the task was done")
-    rationale: str
+    rationale: str = ""
+
+    @field_validator("session", mode="before")
+    @classmethod
+    def _none_session(cls, v: Any) -> Any:
+        if not v:
+            return {}
+        return {str(k): str(x) for k, x in dict(v).items()}
 
 
 class DraftBatch(BaseModel):

@@ -77,7 +77,7 @@ AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 AWS_REGION=us-east-1
 AGENTREHEARSAL_TARGET_MODEL=us.amazon.nova-lite-v1:0
-AGENTREHEARSAL_AUTHOR_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0
+AGENTREHEARSAL_AUTHOR_MODEL=us.anthropic.claude-sonnet-4-5-20250929-v1:0
 # AGENTREHEARSAL_DDB_TABLE=agentrehearsal    # leave commented: local file store, so you do not share accounts/runs with others
 ```
 

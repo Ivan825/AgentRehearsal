@@ -51,6 +51,7 @@ export function Scorecard({ run, onOpen }: { run: Run; onOpen: (s: ScenarioResul
           <div className="mt-4 rounded border border-line bg-ink p-3 text-xs text-muted">
             <div className="font-semibold text-text">{run.agent} · {run.mode === 'enforce' ? 'policy enforced' : 'policy log-only'}</div>
             <div className="mt-1 font-mono">{run.model}</div>
+            <div className="mt-1">{run.scenarios.length} scenarios: {run.scenarios.filter((x) => x.source === 'seed').length} seed · {run.scenarios.filter((x) => x.source === 'generated').length} authored by Bedrock{run.scenarios.some((x) => x.source === 'holdout') ? ` · ${run.scenarios.filter((x) => x.source === 'holdout').length} held-out` : ''}</div>
             <div className="mt-1">{run.scenarios.reduce((n, x) => n + x.attempts.length, 0)} attempts · attacks run {Math.max(...run.scenarios.map((x) => x.attempts.length))}× each</div>
           </div>
         </Card>

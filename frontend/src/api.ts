@@ -52,7 +52,7 @@ export const api = {
   startRun: (body: { mode: 'rehearse' | 'enforce'; model: 'bedrock' | 'scripted'; model_id?: string | null; attack_runs?: number; workers?: number; base_run_id?: string; cedar?: string }) =>
     j<Job>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
   job: (id: string) => j<Job>(`/api/jobs/${id}`),
-  models: () => j<{ models: { id: string; label: string; note?: string }[]; default: string; live: boolean }>('/api/models'),
+  models: () => j<{ models: { id: string; label: string; note?: string; provider?: string; available?: boolean }[]; default: string; live: boolean; providers?: { id: string; label: string; available: boolean; env: string | null }[] }>('/api/models'),
   workspaceMcp: () => j<{ token: string; url: string; tools: string[] }>('/api/workspace/mcp'),
   rotateMcp: () => j<{ token: string; url: string; tools: string[] }>('/api/workspace/mcp/rotate', { method: 'POST' }),
   runs: () => j<{ runs: RunListItem[] }>('/api/runs'),
