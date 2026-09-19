@@ -60,6 +60,8 @@ creates it), otherwise JSON files under `backend/data/`. See `docs/PRODUCT_GUIDE
 
 ## Quick start
 
+New to the repo? `docs/SETUP.md` is the full team setup guide (tools, clone, offline run, AWS keys, branch rules, who owns what).
+
 ```bash
 # backend
 cd backend
