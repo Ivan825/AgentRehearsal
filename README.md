@@ -83,7 +83,7 @@ uvicorn agentrehearsal.api:app --reload --port 8000
 cd ../frontend && npm install && npm run dev             # http://localhost:5173, /api proxied to :8000
 ```
 
-Deploy: `amplify.yml` builds the UI on Amplify Hosting (set `VITE_API_BASE`); `backend/apprunner.yaml` or `backend/Dockerfile` serves the API on App Runner. `infra/README.md` covers AgentCore Gateway + Policy and DynamoDB.
+Deploy: `amplify.yml` builds the UI on Amplify Hosting (set `VITE_API_BASE`); `backend/Dockerfile` + `scripts/push_image.sh` put the API on ECS Express Mode. `infra/README.md` covers AgentCore Gateway + Policy and DynamoDB.
 
 Tests: `cd backend && pytest`.
 

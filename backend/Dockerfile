@@ -1,9 +1,9 @@
-# API container for App Runner / ECS. Build from the backend/ directory.
+# API container for Amazon ECS Express Mode (or any container host). Build from the backend/ directory.
 FROM python:3.12-slim
 WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 AGENTREHEARSAL_RUNS_DIR=/tmp/runs
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-ENV AGENTREHEARSAL_RUNS_DIR=/tmp/runs
 EXPOSE 8000
 CMD ["uvicorn", "agentrehearsal.api:app", "--host", "0.0.0.0", "--port", "8000"]

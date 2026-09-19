@@ -106,7 +106,7 @@ export function Landing() {
               <p className="mt-3 text-muted">No decoration. Each piece is there because a stage of the loop runs on it.</p>
             </div>
             <div className="grid gap-2 text-sm">
-              {[['Strands Agents', 'runs the agent under test and exposes the tool-call hook'], ['Amazon Bedrock', 'powers the agent, parses rules, writes scenarios'], ['Cedar', 'the policy language for verdicts and enforcement'], ['AgentCore Gateway + Policy', 'enforces the same policy at the tool boundary, LOG_ONLY → ENFORCE'], ['DynamoDB', 'accounts, workspaces and run history'], ['Amplify Hosting · App Runner', 'serve the UI and the API']].map(([s, d]) => (
+              {[['Strands Agents', 'runs the agent under test and exposes the tool-call hook'], ['Amazon Bedrock', 'powers the agent, parses rules, writes scenarios'], ['Cedar', 'the policy language for verdicts and enforcement'], ['AgentCore Gateway + Policy', 'enforces the same policy at the tool boundary, LOG_ONLY → ENFORCE'], ['DynamoDB', 'accounts, workspaces and run history'], ['Amplify Hosting · ECS Express Mode', 'serve the UI and the API']].map(([s, d]) => (
                 <div key={s} className="flex gap-3 rounded-lg border border-line bg-panel px-4 py-2.5"><span className="w-56 shrink-0 font-semibold">{s}</span><span className="text-muted">{d}</span></div>
               ))}
             </div>

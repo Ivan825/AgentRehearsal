@@ -35,7 +35,7 @@ scripted. [Result of the live run: X of Y attacks succeeded before protection, 0
 | Bedrock AgentCore Gateway + Policy | Enforces the same policy at the tool boundary on AWS, LOG_ONLY → ENFORCE [state: deployed / not yet] |
 | DynamoDB | Run history [state] |
 | Amplify Hosting | Serves the UI [URL] |
-| App Runner | Serves the API [URL] |
+| ECS Express Mode | Serves the API [URL] |
 
 ## What we learned
 

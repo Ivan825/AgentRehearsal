@@ -436,6 +436,11 @@ def list_models(user: dict[str, Any] = auth.User) -> dict[str, Any]:
     return {"models": list(out.values()), "default": config.TARGET_MODEL_ID, "live": live}
 
 
+@app.get("/")
+def root() -> dict[str, Any]:
+    return {"service": "agentrehearsal-api", "ok": True, "docs": "/docs"}
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "region": config.AWS_REGION, "target_model": config.TARGET_MODEL_ID, "auth": auth.AUTH_ENABLED, "store": "dynamodb" if config.DDB_TABLE else "file"}

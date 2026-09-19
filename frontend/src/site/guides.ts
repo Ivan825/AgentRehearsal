@@ -43,7 +43,7 @@ export const GUIDES: Guide[] = [
     sections: [
       { h: 'Local enforcement', p: ['A Strands hook sees every tool call before it runs, evaluates the Cedar policy with cedarpy, and either logs (rehearse) or cancels the call (enforce). This is the path every run uses by default.'] },
       { h: 'AgentCore Gateway enforcement', p: ['The same tools deployed as a Lambda target behind an AgentCore Gateway, with a policy engine attached in LOG_ONLY for rehearsal and ENFORCE for replay. Set AGENTREHEARSAL_GATEWAY_URL and run with --tools gateway; denials then come from AWS rather than the local hook. The infra/README.md in the repository walks through the seven commands.'] },
-      { h: 'Persistence and hosting', p: ['Accounts, workspaces, run history and contact messages live in one DynamoDB table (scripts/create_tables.py). The UI is built for Amplify Hosting and the API for App Runner; both configs are in the repository.'] },
+      { h: 'Persistence and hosting', p: ['Accounts, workspaces, run history and contact messages live in one DynamoDB table (scripts/create_tables.py). The UI is built for Amplify Hosting and the API for ECS Express Mode; both configs are in the repository.'] },
     ],
   },
 ]
