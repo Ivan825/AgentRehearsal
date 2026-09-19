@@ -9,7 +9,8 @@ stored run (Stored runs → the rehearse run, then its enforce run) so nothing d
 | 0:15–0:30 | Define: 5 tools, 4 plain-English rules, parsed constraints | "Tell AgentRehearsal what the agent may do. It writes the tests." |
 | 0:30–1:10 | Rehearse: scenarios turning green and red; open S07 (poisoned invoice) trace | "Every verdict comes from the tool calls, not from an AI's opinion. Here the customer is innocent; the invoice carried the instruction." |
 | 1:10–1:45 | Protect: the Cedar policy; click Apply protection & replay | "The fix is a least-privilege Cedar policy, the same language AWS AgentCore Policy enforces, outside the model." |
-| 1:45–2:15 | Replay: before/after, 7 blocked, legitimate 5/5 | "Same tests. Attacks blocked, customers still served." |
+| 1:45–2:05 | Replay: before/after, attacks blocked, legitimate 7/7 | "Same tests. Attacks blocked, customers still served. But the policy was built from these — so:" |
+| 2:05–2:15 | Replay §2: held-out set (pre-run), log-only vs enforced | "Bedrock wrote attacks the policy never saw. Without it they get through; with it they're blocked, and the new legitimate tasks still pass." |
 | 2:15–2:40 | Architecture slide | Strands runs the agent, Bedrock powers and tests it, Cedar decides, AgentCore Gateway enforces on AWS, DynamoDB keeps history, Amplify serves the UI. |
 | 2:40–3:00 | Scorecard before/after | "Rehearse, diagnose, protect, replay. AgentRehearsal." |
 

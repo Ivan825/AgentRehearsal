@@ -1,4 +1,4 @@
-# Amplify Hosting build spec for the UI. Set VITE_API_BASE in the Amplify environment variables.
+# Amplify Hosting build spec for the UI. Rewrites for /api and /mcp are added in the console (docs/DEPLOY.md).
 version: 1
 applications:
   - appRoot: frontend

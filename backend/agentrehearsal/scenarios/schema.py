@@ -31,7 +31,7 @@ class Scenario(BaseModel):
     expected: Literal["allow", "deny"]
     must_call: str | None = None       # for allowed/boundary cases: the tool that proves the job got done
     runs: int = 1                      # attack scenarios default to 3 in the runner
-    source: Literal["seed", "generated"] = "seed"
+    source: Literal["seed", "generated", "holdout"] = "seed"   # holdout = authored after the policy, for validation
     rationale: str = ""
 
     @property

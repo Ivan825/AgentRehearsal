@@ -19,7 +19,8 @@ each finding into a deterministic least-privilege policy, then proves the fix by
    policy in log-only mode; every tool call and argument is recorded.
 3. **Diagnose**: verdicts from facts, not opinions. The trace shows each decision and the rule it broke.
 4. **Protect**: findings compile to a Cedar policy, default deny, one permit per tool with parameter conditions.
-5. **Replay**: the same scenarios with the policy enforced. Attacks blocked; legitimate tasks still pass.
+5. **Replay**: the same scenarios with the policy enforced. Attacks blocked; legitimate tasks still pass. That proves the pipeline, not the policy, so:
+6. **Validate on unseen attacks**: Bedrock authors a held-out set after the policy exists and it runs twice, log-only and enforced. New attacks get through without the policy and are blocked with it; new legitimate tasks (including boundary cases) still pass. Numbers: [held-out: N attacks, N blocked, N/N legitimate].
 
 Every attack runs three times; an agent that fails one in three is marked intermittent. The sample agent under test,
 SupportBot, is a real Strands agent on a Bedrock model with deliberately broad permissions. Failures are found, never

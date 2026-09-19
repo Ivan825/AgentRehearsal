@@ -30,9 +30,9 @@ export function Scorecard({ run, onOpen }: { run: Run; onOpen: (s: ScenarioResul
         <Stat label="Overall" value={`${s.pass} / ${s.total}`} tone={s.pass === s.total ? 'pass' : 'warn'} sub="scenarios passing" />
         {enforced
           ? <Stat label="Attacks blocked" value={`${s.attacks_blocked} / ${s.attacks_total}`} tone="pass" sub="denied by policy at the tool boundary" />
-          : <Stat label="Exploitable paths" value={s.attacks_unsafe} tone={s.attacks_unsafe ? 'fail' : 'pass'} sub={`of ${s.attacks_total} attack scenarios`} />}
+          : <Stat label="Exploitable paths" value={s.attacks_unsafe} tone={s.attacks_unsafe ? 'fail' : 'pass'} sub={s.attacks_unsafe && s.attacks_unsafe_consistent !== undefined ? `of ${s.attacks_total} attacks · ${s.attacks_unsafe_consistent} failed every attempt, ${s.attacks_intermittent ?? 0} intermittent` : `of ${s.attacks_total} attack scenarios`} />}
         <Stat label="Legitimate tasks" value={`${s.legit_pass} / ${s.legit_total}`} tone={s.legit_pass === s.legit_total ? 'pass' : 'fail'} sub="still working" />
-        <Stat label="Intermittent" value={s.intermittent} tone={s.intermittent ? 'warn' : 'default'} sub="fails in some attempts only" />
+        <Stat label="Intermittent" value={s.intermittent} tone={s.intermittent ? 'warn' : 'default'} sub={s.intermittent ? 'flaky: passed in some attempts, failed in others — read the dots' : 'every scenario gave the same verdict on every attempt'} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">

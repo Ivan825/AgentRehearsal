@@ -1,4 +1,4 @@
-import type { AgentSpec, Comparison, Job, Run, RunListItem, Scenario } from './types'
+import type { AgentSpec, Comparison, Example, Job, Run, RunListItem, Scenario } from './types'
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? ''
 
@@ -34,15 +34,21 @@ export const api = {
   contact: (name: string, email: string, message: string) => j<{ ok: boolean }>('/api/contact', { method: 'POST', body: JSON.stringify({ name, email, message }) }),
   spec: () => j<AgentSpec>('/api/spec'),
   saveSpec: (spec: AgentSpec) => j<AgentSpec>('/api/spec', { method: 'PUT', body: JSON.stringify(spec) }),
-  exampleSpec: () => j<AgentSpec>('/api/spec/example'),
-  resetExample: () => j<{ spec: AgentSpec; scenarios: number }>('/api/spec/reset', { method: 'POST' }),
+  examples: () => j<{ examples: Example[] }>('/api/examples'),
+  exampleSpec: (example = 'supportbot') => j<AgentSpec>(`/api/spec/example?example=${example}`),
+  resetExample: (example = 'supportbot') => j<{ spec: AgentSpec; scenarios: number; example: string }>('/api/spec/reset', { method: 'POST', body: JSON.stringify({ example }) }),
   importTools: (tools: unknown[]) => j<{ tools: AgentSpec['tools'] }>('/api/tools/import', { method: 'POST', body: JSON.stringify({ tools }) }),
   saveScenarios: (scenarios: Scenario[]) => j<{ count: number }>('/api/scenarios', { method: 'PUT', body: JSON.stringify({ scenarios }) }),
   parseRules: (rules: string[]) => j<{ constraints: AgentSpec['constraints'] }>('/api/rules/parse', { method: 'POST', body: JSON.stringify({ rules }) }),
   policy: () => j<{ cedar: string; problems: string[] }>('/api/policy'),
   validatePolicy: (cedar: string) => j<{ problems: string[] }>('/api/policy/validate', { method: 'POST', body: JSON.stringify({ cedar }) }),
   scenarios: () => j<{ scenarios: Scenario[] }>('/api/scenarios'),
-  generate: (per_constraint = 4) => j<{ generated: number; total: number }>('/api/scenarios/generate', { method: 'POST', body: JSON.stringify({ per_constraint, append: true }) }),
+  generate: async (per_constraint = 4) => {
+    // authoring runs as a background job so hosted proxies (30 s limit) never cut it off
+    const job = await j<Job>('/api/scenarios/generate', { method: 'POST', body: JSON.stringify({ per_constraint, append: true }) })
+    const done = await waitJob(job.job_id)
+    return done.result as { generated: number; total: number }
+  },
   startRun: (body: { mode: 'rehearse' | 'enforce'; model: 'bedrock' | 'scripted'; model_id?: string | null; attack_runs?: number; workers?: number; base_run_id?: string; cedar?: string }) =>
     j<Job>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
   job: (id: string) => j<Job>(`/api/jobs/${id}`),
@@ -53,4 +59,15 @@ export const api = {
   run: (id: string) => j<Run>(`/api/runs/${id}`),
   reportUrl: (id: string) => `${BASE}/api/runs/${id}/report.md`,
   compare: (before: string, after: string) => j<Comparison>(`/api/compare?before=${before}&after=${after}`),
+  validate: (body: { base_run_id: string; per_constraint?: number; model: 'bedrock' | 'scripted'; model_id?: string | null; attack_runs?: number }) => j<Job>('/api/validate', { method: 'POST', body: JSON.stringify(body) }),
+}
+
+/** Poll a background job until it finishes; throws with the job's error on failure. */
+export async function waitJob(jobId: string, intervalMs = 1500): Promise<Job> {
+  for (;;) {
+    const cur = await api.job(jobId)
+    if (cur.status === 'done') return cur
+    if (cur.status === 'error') throw new Error(cur.error ?? 'job failed')
+    await new Promise(r => setTimeout(r, intervalMs))
+  }
 }

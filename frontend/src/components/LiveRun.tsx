@@ -8,9 +8,20 @@ export function LiveRun({ job }: { job: Job }) {
   const byId = new Map<string, Job['progress']>()
   for (const p of job.progress) byId.set(p.scenario_id, [...(byId.get(p.scenario_id) ?? []), p])
   const enforce = job.mode === 'enforce'
+  if (job.kind === 'validate' && job.phase === 'authoring') {
+    return (
+      <Card title="Authoring held-out scenarios" right={<span className="text-xs text-muted">author model · Bedrock</span>}>
+        <div className="mb-3 h-1.5 w-full overflow-hidden rounded bg-panel-2"><div className="h-full w-1/3 animate-pulse bg-accent" /></div>
+        <p className="text-sm text-muted">Bedrock is writing attacks and legitimate tasks the policy has never seen, told to avoid every scenario it was built from. They will run twice: policy log-only, then enforced.</p>
+      </Card>
+    )
+  }
+  const heading = job.kind === 'validate'
+    ? (enforce ? 'Held-out set · policy ENFORCED (2 of 2)' : 'Held-out set · policy LOG-ONLY (1 of 2)')
+    : (enforce ? 'Replaying with policy ENFORCED' : 'Rehearsing with policy LOG-ONLY')
   return (
     <Card
-      title={`${enforce ? 'Replaying with policy ENFORCED' : 'Rehearsing with policy LOG-ONLY'} · ${done} / ${total} attempts`}
+      title={`${heading} · ${done} / ${total} attempts`}
       right={<span className="text-xs text-muted">{job.model === 'scripted' ? 'scripted offline simulation' : `live Bedrock target · ${job.model_id ?? ''}`}</span>}
     >
       <div className="mb-3 h-1.5 w-full overflow-hidden rounded bg-panel-2">

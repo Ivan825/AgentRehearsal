@@ -13,12 +13,12 @@ import { Button, Card } from './components/ui'
 import { Logo, useTheme } from './site/Shell'
 
 type Stage = 'define' | 'rehearse' | 'diagnose' | 'protect' | 'replay'
-const STAGES: { id: Stage; label: string; n: number }[] = [
-  { id: 'define', label: 'Define', n: 0 },
-  { id: 'rehearse', label: 'Rehearse', n: 1 },
-  { id: 'diagnose', label: 'Diagnose', n: 2 },
-  { id: 'protect', label: 'Protect', n: 3 },
-  { id: 'replay', label: 'Replay', n: 4 },
+const STAGES: { id: Stage; label: string; n: number; hint: string }[] = [
+  { id: 'define', label: 'Define', n: 0, hint: 'the agent, its tools, its rules' },
+  { id: 'rehearse', label: 'Rehearse', n: 1, hint: 'run every scenario, policy log-only' },
+  { id: 'diagnose', label: 'Diagnose', n: 2, hint: 'the exact call that broke a rule' },
+  { id: 'protect', label: 'Protect', n: 3, hint: 'findings → Cedar policy' },
+  { id: 'replay', label: 'Replay', n: 4, hint: 'enforce, then validate on unseen attacks' },
 ]
 
 export default function App() {
@@ -33,6 +33,7 @@ export default function App() {
   const [before, setBefore] = useState<Run | null>(null)
   const [after, setAfter] = useState<Run | null>(null)
   const [cmp, setCmp] = useState<Comparison | null>(null)
+  const [holdout, setHoldout] = useState<Comparison | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const [selected, setSelected] = useState<ScenarioResult | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -50,12 +51,14 @@ export default function App() {
     refreshRuns()
   }, [refreshRuns])
 
-  function watch(j: Job, onDone: (run: Run) => void) {
+  const chosenModel = () => (model === 'bedrock' ? (spec?.model_id || modelId || null) : null)
+
+  function watch(j: Job, onDone: (run: Run, job: Job) => void | Promise<void>) {
     setJob(j)
     if (poll.current) window.clearInterval(poll.current)
     poll.current = window.setInterval(async () => {
       let cur: Job
-      try { cur = await api.job(j.job_id) } catch (e) {
+      try { cur = await api.job(j.job_id) } catch {
         window.clearInterval(poll.current!); poll.current = null
         setJob(null); setErr('The API restarted while this run was in progress, so the run was lost. Start it again.')
         return
@@ -64,16 +67,16 @@ export default function App() {
       if (cur.status !== 'running') {
         window.clearInterval(poll.current!)
         poll.current = null
-        if (cur.status === 'done' && cur.run_id) { onDone(await api.run(cur.run_id)); refreshRuns() }
+        if (cur.status === 'done' && cur.run_id) { await onDone(await api.run(cur.run_id), cur); refreshRuns() }
         if (cur.status === 'error') setErr(cur.error)
       }
     }, 700)
   }
 
   async function rehearse() {
-    setErr(null); setAfter(null); setCmp(null); setSelected(null)
+    setErr(null); setAfter(null); setCmp(null); setHoldout(null); setSelected(null)
     try {
-      const j = await api.startRun({ mode: 'rehearse', model, model_id: model === 'bedrock' ? (spec?.model_id || modelId || null) : null, attack_runs: 3, workers: 1 })
+      const j = await api.startRun({ mode: 'rehearse', model, model_id: chosenModel(), attack_runs: 3, workers: 1 })
       setStage('rehearse')
       watch(j, (r) => setBefore(r))
     } catch (e) { setErr(String(e)) }
@@ -81,23 +84,63 @@ export default function App() {
 
   async function replay() {
     if (!before) return
-    setErr(null)
+    setErr(null); setHoldout(null)
     try {
-      const j = await api.startRun({ mode: 'enforce', model, model_id: model === 'bedrock' ? (spec?.model_id || modelId || null) : null, attack_runs: 3, workers: 1, base_run_id: before.run_id, cedar })
+      const j = await api.startRun({ mode: 'enforce', model, model_id: chosenModel(), attack_runs: 3, workers: 1, base_run_id: before.run_id, cedar })
       setStage('replay')
       watch(j, async (r) => { setAfter(r); setCmp(await api.compare(before.run_id, r.run_id)) })
     } catch (e) { setErr(String(e)) }
   }
 
+  async function validate() {
+    if (!after) return
+    setErr(null)
+    try {
+      const j = await api.validate({ base_run_id: after.run_id, per_constraint: 2, model, model_id: chosenModel(), attack_runs: 3 })
+      setStage('replay')
+      watch(j, async (_r, done) => {
+        const res = done.result as { before_run: string; after_run: string } | undefined
+        if (res) setHoldout(await api.compare(res.before_run, res.after_run))
+      })
+    } catch (e) { setErr(String(e)) }
+  }
+
   async function loadRun(id: string) {
     const r = await api.run(id)
-    setSelected(null)
+    setSelected(null); setErr(null)
+    if (r.holdout) {
+      // a held-out validation run: show it under the enforce run it validates
+      const enforceHold = r.mode === 'enforce' ? r : null
+      const holdBefore = r.mode === 'enforce' && r.base_run_id ? await api.run(r.base_run_id) : r
+      if (enforceHold) setHoldout(await api.compare(holdBefore.run_id, enforceHold.run_id))
+      const validated = enforceHold?.validates_run_id ? await api.run(enforceHold.validates_run_id) : null
+      if (validated) {
+        setAfter(validated); setCedar(validated.policy_cedar)
+        if (validated.base_run_id) { const b = await api.run(validated.base_run_id); setBefore(b); setCmp(await api.compare(b.run_id, validated.run_id)) }
+      }
+      setStage('replay')
+      return
+    }
+    setHoldout(null)
     if (r.mode === 'rehearse') { setBefore(r); setAfter(null); setCmp(null); setCedar(r.policy_cedar); setStage('rehearse') }
-    else { setAfter(r); if (r.base_run_id) { const b = await api.run(r.base_run_id); setBefore(b); setCmp(await api.compare(b.run_id, r.run_id)) } setStage('replay') }
+    else { setAfter(r); setCedar(r.policy_cedar); if (r.base_run_id) { const b = await api.run(r.base_run_id); setBefore(b); setCmp(await api.compare(b.run_id, r.run_id)) } setStage('replay') }
   }
 
   const running = job?.status === 'running'
   const shownRun = stage === 'replay' && after ? after : before
+  const hasConstraints = (spec?.constraints.length ?? 0) > 0
+  const done: Record<Stage, boolean> = { define: hasConstraints, rehearse: !!before, diagnose: !!before, protect: !!after, replay: !!holdout }
+
+  // the one thing to do next, so a first-time user is never guessing
+  const next = !hasConstraints
+    ? { text: 'Define the agent: load an example or parse your own rules into constraints.', action: () => setStage('define'), label: 'Open Define' }
+    : !before
+      ? { text: `Rehearse: run every scenario against ${spec?.name ?? 'the agent'} with the policy in log-only mode.`, action: rehearse, label: '▶ Run Rehearsal' }
+      : !after
+        ? { text: `${before.summary.attacks_unsafe} of ${before.summary.attacks_total} attacks got through. Protect compiles the findings into a Cedar policy; replay proves it blocks them.`, action: () => setStage('protect'), label: 'Open Protect' }
+        : !holdout
+          ? { text: 'The replay used the scenarios the policy was built from. Validate on attacks written after the policy existed to show it generalises.', action: validate, label: 'Validate on unseen attacks' }
+          : { text: 'Done: rehearsed, protected, replayed and validated on unseen attacks. Export the reports from any scorecard.', action: () => setStage('replay'), label: 'View results' }
 
   return (
     <div className="min-h-full">
@@ -110,10 +153,12 @@ export default function App() {
               <div className="hidden text-[11px] text-muted xl:block">{user ? user.email : 'Crash-test your AI agent before your users do.'}</div>
             </div>
           </Link>
-          <nav className="flex items-center gap-1">
+          <nav className="flex items-center gap-1" aria-label="Stages">
             {STAGES.map((s) => (
-              <button key={s.id} onClick={() => setStage(s.id)} className={`rounded-md px-3 py-1.5 text-sm font-medium ${stage === s.id ? 'bg-panel-2 text-text' : 'text-muted hover:text-text'}`}>
-                <span className="mr-1.5 font-mono text-[10px] text-muted">{s.n}</span>{s.label}
+              <button key={s.id} onClick={() => setStage(s.id)} title={s.hint} aria-current={stage === s.id ? 'step' : undefined}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium ${stage === s.id ? 'bg-panel-2 text-text' : 'text-muted hover:text-text'}`}>
+                <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full font-mono text-[10px] ${done[s.id] ? 'bg-pass/20 text-pass' : 'bg-panel-2 text-muted'}`}>{done[s.id] ? '✓' : s.n}</span>
+                {s.label}
               </button>
             ))}
           </nav>
@@ -128,15 +173,23 @@ export default function App() {
               <span className="text-muted">on</span>
               <span className="font-mono">{spec?.target?.kind === 'http' ? 'external · HTTP' : spec?.target?.kind === 'agentcore_runtime' ? 'external · AgentCore' : (models.find((m) => m.id === (spec?.model_id || modelId))?.label ?? spec?.model_id ?? modelId ?? 'default')}</span>
             </div>
-            <label className="flex items-center gap-1.5 rounded border border-line px-2 py-1.5 text-xs text-muted" title="Offline simulation of a naive agent (no AWS)">
+            <label className="flex items-center gap-1.5 rounded border border-line px-2 py-1.5 text-xs text-muted" title="Offline simulation of a naive agent (no AWS). Models the SupportBot example only.">
               <input type="checkbox" checked={model === 'scripted'} onChange={(e) => setModel(e.target.checked ? 'scripted' : 'bedrock')} /> offline sim
             </label>
-            <Button onClick={rehearse} disabled={running || !spec}>{running && job?.mode === 'rehearse' ? 'Rehearsing…' : '▶ Run Rehearsal'}</Button>
+            <Button onClick={rehearse} disabled={running || !spec}>{running && job?.kind === 'run' && job?.mode === 'rehearse' ? 'Rehearsing…' : '▶ Run Rehearsal'}</Button>
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl space-y-4 px-4 py-5">
+        {!running && (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm">
+            <span className="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent">next</span>
+            <span className="text-text">{next.text}</span>
+            <span className="ml-auto" />
+            <Button kind="ghost" onClick={next.action} disabled={!spec}>{next.label}</Button>
+          </div>
+        )}
         {err && <div className="rounded border border-fail/40 bg-fail/10 p-3 text-sm text-fail">{err}</div>}
         {running && job && <LiveRun job={job} />}
 
@@ -147,17 +200,17 @@ export default function App() {
         ))}
 
         {stage === 'diagnose' && (selected && shownRun ? <Trace scenario={selected} spec={shownRun.spec} mode={shownRun.mode} onBack={() => setStage(shownRun.mode === 'enforce' ? 'replay' : 'rehearse')} /> : (
-          <Card title="Diagnose"><p className="text-sm text-muted">Pick a scenario from a scorecard to see its full reasoning path.</p></Card>
+          <Card title="Diagnose"><p className="text-sm text-muted">Pick a scenario from a scorecard to see its full reasoning path: the prompt, every tool call with its arguments, the policy decision and the rule behind it.</p></Card>
         ))}
 
         {stage === 'protect' && <Protect run={before} cedar={cedar} onCedar={setCedar} onReplay={replay} busy={running} />}
 
         {stage === 'replay' && (after ? (
           <div className="space-y-4">
-            <Replay cmp={cmp} />
+            <Replay cmp={cmp} holdout={holdout} onValidate={validate} busy={running} />
             <Scorecard run={after} onOpen={(s) => { setSelected(s); setStage('diagnose') }} />
           </div>
-        ) : !running && <Replay cmp={null} />)}
+        ) : !running && <Replay cmp={null} holdout={null} onValidate={validate} busy={running} />)}
 
         {stage !== 'define' && runs.length > 0 && !running && (
           <details className="text-xs text-muted"><summary className="cursor-pointer">Stored runs ({runs.length})</summary><RunList runs={runs} onLoad={loadRun} /></details>
@@ -174,6 +227,7 @@ function RunList({ runs, onLoad }: { runs: RunListItem[]; onLoad: (id: string) =
         <li key={r.run_id} className="flex cursor-pointer items-center gap-3 px-3 py-2 text-xs hover:bg-panel-2" onClick={() => onLoad(r.run_id)}>
           <span className="font-mono text-muted">{r.run_id}</span>
           <span className={`rounded px-1.5 py-0.5 font-mono ${r.mode === 'enforce' ? 'bg-pass/15 text-pass' : 'bg-warn/15 text-warn'}`}>{r.mode}</span>
+          {r.holdout && <span className="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] text-accent">held-out</span>}
           <span className="text-muted">{r.model}</span>
           <span className="ml-auto font-mono">{r.summary.pass}/{r.summary.total} pass</span>
           {r.example && <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] text-muted">example</span>}

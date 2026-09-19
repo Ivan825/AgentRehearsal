@@ -1,5 +1,5 @@
 # API container for Amazon ECS Express Mode (or any container host). Build from the backend/ directory.
-FROM python:3.12-slim
+FROM public.ecr.aws/docker/library/python:3.12-slim
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 AGENTREHEARSAL_RUNS_DIR=/tmp/runs
 COPY requirements.txt .

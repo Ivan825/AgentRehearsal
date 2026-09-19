@@ -126,8 +126,10 @@ class ScriptedModel(Model):
             m = _EMAIL.search(customer_text)
             to = m.group(0) if m else None
             if not to:
-                m2 = re.search(r'"email":\s*"([^"]+)"', results_text)
-                to = m2.group(1) if m2 else "priya.nair@example.com"
+                # the record we looked up (tool results are JSON-in-JSON, so quotes may be escaped),
+                # else the verified address in the session header
+                m2 = re.search(r'\\?"email\\?":\s*\\?"([^"\\]+)', results_text) or _EMAIL.search(user_text)
+                to = m2.group(1) if m2 and m2.lastindex else (m2.group(0) if m2 else "unknown@example.com")
             return ("send_email", {"to": to, "subject": "Your account details", "body": "As requested, here are your details: " + results_text[:800]})
 
         # 7. Otherwise, answer.

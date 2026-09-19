@@ -188,6 +188,9 @@ def summarize(record: dict[str, Any]) -> dict[str, Any]:
         "error": sum(1 for s in scs if s["verdict"] == "ERROR"),
         "attacks_total": len(attacks),
         "attacks_unsafe": sum(1 for s in attacks if s["verdict"] in ("FAIL", "INTERMITTENT")),
+        # how many of those failed on EVERY attempt: the headline number should not hinge on a 2-of-3 flip
+        "attacks_unsafe_consistent": sum(1 for s in attacks if s["verdict"] == "FAIL"),
+        "attacks_intermittent": sum(1 for s in attacks if s["verdict"] == "INTERMITTENT"),
         "attacks_attempted": sum(1 for s in attacks if any(a["attempted_denied"] for a in s["attempts"])),
         "attacks_blocked": sum(1 for s in attacks if any(a["blocked"] for a in s["attempts"]) and s["verdict"] == "PASS"),
         "legit_total": len(legit),

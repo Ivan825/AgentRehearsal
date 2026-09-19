@@ -25,6 +25,7 @@ from .scenarios.schema import ATTACK_CATEGORIES, Scenario, ScenarioSet, seeds_pa
 from .spec import AgentSpec, ToolDef, ToolParam
 from .store import get_store
 from .target import external
+import os
 import secrets
 
 app = FastAPI(title="AgentRehearsal API", version="0.2.0")
@@ -94,10 +95,19 @@ def me(user: dict[str, Any] = auth.User) -> dict[str, Any]:
 
 # ---- bring your own agent: the workspace's MCP tool endpoint -------------------------------
 
+def _public_base(request: Request) -> str:
+    """The URL agents outside should use to reach this API.
+
+    Behind a proxy (Amplify rewrites, CloudFront, an ALB) request.base_url is the internal
+    address, so deployments set AGENTREHEARSAL_PUBLIC_URL to the address users actually see.
+    """
+    return (os.environ.get("AGENTREHEARSAL_PUBLIC_URL") or str(request.base_url)).rstrip("/")
+
+
 @app.get("/api/workspace/mcp")
 def workspace_mcp(request: Request, user: dict[str, Any] = auth.User) -> dict[str, Any]:
     p = _project(user)
-    base = str(request.base_url).rstrip("/")
+    base = _public_base(request)
     return {"token": p["mcp_token"], "url": f"{base}/mcp/{p['mcp_token']}", "tools": [t.name for t in p["spec"].tools]}
 
 
@@ -154,19 +164,56 @@ def put_spec(spec: AgentSpec, user: dict[str, Any] = auth.User) -> dict[str, Any
     return spec.model_dump()
 
 
+EXAMPLES: dict[str, dict[str, Any]] = {
+    "supportbot": {
+        "name": "SupportBot",
+        "blurb": "Electronics-store support agent with refund, email and delete tools. Ships with 15 hand-written seed scenarios; the offline simulation models this agent.",
+        "spec": DEFAULT_SPEC,
+        "scenarios": seeds_path(),
+        "offline": True,
+    },
+    "traveldesk": {
+        "name": "TravelDesk",
+        "blurb": "Corporate travel agent with booking, cancellation and itinerary-sharing tools. No seeds: every scenario is authored by Bedrock from the rules, which is how a new agent is tested.",
+        "spec": BACKEND_DIR / "examples" / "traveldesk.spec.json",
+        "scenarios": BACKEND_DIR / "examples" / "traveldesk.scenarios.json",   # optional, written by `agentrehearsal generate`
+        "offline": False,
+    },
+}
+
+
+@app.get("/api/examples")
+def list_examples() -> dict[str, Any]:
+    out = []
+    for key, ex in EXAMPLES.items():
+        n = len(ScenarioSet.load(ex["scenarios"]).scenarios) if Path(ex["scenarios"]).exists() else 0
+        out.append({"id": key, "name": ex["name"], "blurb": ex["blurb"], "scenarios": n, "offline": ex["offline"]})
+    return {"examples": out}
+
+
 @app.get("/api/spec/example")
-def get_example_spec() -> dict[str, Any]:
-    """The SupportBot preset: a complete agent expressed as data (tools, simulated responses, rules, session)."""
-    return AgentSpec.load(DEFAULT_SPEC).model_dump()
+def get_example_spec(example: str = "supportbot") -> dict[str, Any]:
+    """An example preset: a complete agent expressed as data (tools, simulated responses, rules, session)."""
+    ex = EXAMPLES.get(example)
+    if not ex:
+        raise HTTPException(404, f"no example {example!r}")
+    return AgentSpec.load(ex["spec"]).model_dump()
+
+
+class ResetIn(BaseModel):
+    example: str = "supportbot"
 
 
 @app.post("/api/spec/reset")
-def reset_to_example(user: dict[str, Any] = auth.User) -> dict[str, Any]:
+def reset_to_example(body: ResetIn | None = None, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    ex = EXAMPLES.get((body or ResetIn()).example)
+    if not ex:
+        raise HTTPException(404, "no such example")
     p = _project(user)
-    p["spec"] = AgentSpec.load(DEFAULT_SPEC)
-    p["scenarios"] = ScenarioSet.load(seeds_path()).scenarios
+    p["spec"] = AgentSpec.load(ex["spec"])
+    p["scenarios"] = ScenarioSet.load(ex["scenarios"]).scenarios if Path(ex["scenarios"]).exists() else []
     _persist(user)
-    return {"spec": p["spec"].model_dump(), "scenarios": len(p["scenarios"])}
+    return {"spec": p["spec"].model_dump(), "scenarios": len(p["scenarios"]), "example": ex["name"]}
 
 
 class ToolsImport(BaseModel):
@@ -240,22 +287,48 @@ class GenerateIn(BaseModel):
 
 @app.post("/api/scenarios/generate")
 def generate_endpoint(body: GenerateIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """Author scenarios with the author model in the background.
+
+    Returns a job; poll /api/jobs/{job_id} until status is "done" and read `result`.
+    (A synchronous call can exceed the 30 s limit of hosted proxies such as Amplify/CloudFront.)
+    """
     from .scenarios.generator import generate_scenarios
 
     p = _project(user)
-    try:
-        ss = generate_scenarios(p["spec"], per_constraint=body.per_constraint)
-    except Exception as e:
-        raise HTTPException(502, f"scenario generation failed: {e}")
-    existing = [s for s in p["scenarios"] if s.source == "seed"] if body.append else []
-    # renumber generated ids after any that already exist
-    start = len([s for s in p["scenarios"] if s.source == "generated"]) if body.append else 0
-    kept = [s for s in p["scenarios"] if s.source == "generated"] if body.append else []
-    for i, s in enumerate(ss.scenarios):
-        s.id = f"G{start + i + 1:02d}"
-    p["scenarios"] = existing + kept + ss.scenarios
-    _persist(user)
-    return {"generated": len(ss.scenarios), "total": len(p["scenarios"])}
+    job = _new_job(user, kind="generate")
+
+    def work() -> None:
+        try:
+            ss = generate_scenarios(p["spec"], per_constraint=body.per_constraint)
+            with _lock:
+                existing = [s for s in p["scenarios"] if s.source == "seed"] if body.append else []
+                # renumber generated ids after any that already exist
+                start = len([s for s in p["scenarios"] if s.source == "generated"]) if body.append else 0
+                kept = [s for s in p["scenarios"] if s.source == "generated"] if body.append else []
+                for i, s in enumerate(ss.scenarios):
+                    s.id = f"G{start + i + 1:02d}"
+                p["scenarios"] = existing + kept + ss.scenarios
+                job["result"] = {"generated": len(ss.scenarios), "total": len(p["scenarios"])}
+                job["status"] = "done"
+            _persist(user)
+        except Exception as e:
+            job["status"] = "error"
+            job["error"] = f"scenario generation failed: {type(e).__name__}: {e}"
+
+    threading.Thread(target=work, daemon=True).start()
+    return _public_job(job)
+
+
+def _new_job(user: dict[str, Any], **fields: Any) -> dict[str, Any]:
+    with _lock:
+        job_id = f"job_{len(_jobs) + 1:04d}"
+        job: dict[str, Any] = {"job_id": job_id, "owner": user["id"], "status": "running", "progress": [], "plan": [], "total_attempts": 0, "run_id": None, "result": None, "error": None, **fields}
+        _jobs[job_id] = job
+    return job
+
+
+def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in job.items() if k != "owner"}
 
 
 # ---- runs --------------------------------------------------------------------------------
@@ -268,6 +341,26 @@ class RunIn(BaseModel):
     workers: int = 1
     base_run_id: str | None = Field(default=None, description="replay the exact scenarios of this run")
     cedar: str | None = Field(default=None, description="override policy text (defaults to the spec's)")
+
+
+def _prepare_target(proj: dict[str, Any], spec: AgentSpec, model_kind: str, model_id: str | None) -> tuple[AgentSpec, Any, bool]:
+    """Resolve where the scenarios run: a simulated agent on a Bedrock model, the scripted stand-in, or the
+    user's own agent reached through the workspace MCP endpoint."""
+    external_target = spec.target.kind != "simulated" and model_kind != "scripted"
+    if external_target:
+        spec = spec.model_copy(deep=True)
+        spec.target.token = proj["mcp_token"]
+    try:
+        model = target_model("none" if external_target else model_kind, model_id or spec.model_id or None)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    return spec, model, external_target
+
+
+def _model_label(spec: AgentSpec, model_kind: str, model_id: str | None, external_target: bool) -> str:
+    if external_target:
+        return "external:" + spec.target.kind
+    return (model_id or spec.model_id or config.TARGET_MODEL_ID) if model_kind == "bedrock" else "scripted"
 
 
 def _load_run_for(user: dict[str, Any], run_id: str) -> dict[str, Any]:
@@ -301,19 +394,10 @@ def start_run(body: RunIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
     if problems:
         raise HTTPException(400, f"policy does not parse: {problems}")
     policy = CedarPolicy(cedar, spec)
-    external_target = spec.target.kind != "simulated" and body.model != "scripted"
-    if external_target:
-        spec = spec.model_copy(deep=True)
-        spec.target.token = proj["mcp_token"]
-    try:
-        model = target_model("none" if external_target else body.model, body.model_id or spec.model_id or None)
-    except Exception as e:
-        raise HTTPException(400, str(e))
+    spec, model, external_target = _prepare_target(proj, spec, body.model, body.model_id)
 
-    job_id = f"job_{len(_jobs) + 1:04d}"
     plan = [{"id": sc.id, "title": sc.title, "category": sc.category, "attempts": max(sc.runs, body.attack_runs if sc.category in ATTACK_CATEGORIES else 1)} for sc in scenarios]
-    job = {"job_id": job_id, "owner": user["id"], "status": "running", "progress": [], "plan": plan, "total_attempts": sum(x["attempts"] for x in plan), "run_id": None, "error": None, "mode": body.mode, "model": body.model, "model_id": ("external:" + spec.target.kind) if external_target else ((body.model_id or spec.model_id or config.TARGET_MODEL_ID) if body.model == "bedrock" else "scripted")}
-    _jobs[job_id] = job
+    job = _new_job(user, kind="run", plan=plan, total_attempts=sum(x["attempts"] for x in plan), mode=body.mode, model=body.model, model_id=_model_label(spec, body.model, body.model_id, external_target))
 
     def progress(p: dict[str, Any]) -> None:
         with _lock:
@@ -333,7 +417,65 @@ def start_run(body: RunIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
             job["error"] = f"{type(e).__name__}: {e}"
 
     threading.Thread(target=work, daemon=True).start()
-    return {k: v for k, v in job.items() if k != "owner"}
+    return _public_job(job)
+
+
+class ValidateIn(BaseModel):
+    """Held-out validation: author scenarios the policy has never seen, then run them twice —
+    without enforcement (do they get through?) and with it (are they blocked, is legitimate work intact?)."""
+
+    base_run_id: str = Field(description="the run whose spec and policy are being validated (usually the enforce run)")
+    per_constraint: int = 2
+    model: Literal["bedrock", "scripted"] = "bedrock"
+    model_id: str | None = None
+    attack_runs: int = 3
+
+
+@app.post("/api/validate")
+def start_validation(body: ValidateIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    from .scenarios.generator import generate_scenarios
+
+    proj = _project(user)
+    base = _load_run_for(user, body.base_run_id)
+    spec = AgentSpec.model_validate(base["spec"])
+    cedar = base["policy_cedar"]
+    problems = validate_cedar(cedar)
+    if problems:
+        raise HTTPException(400, f"policy does not parse: {problems}")
+    policy = CedarPolicy(cedar, spec)
+    spec, model, external_target = _prepare_target(proj, spec, body.model, body.model_id)
+    seen_titles = [s["title"] for s in base["scenarios"]] + [s.title for s in proj["scenarios"]]
+    seen_prompts = [s["prompt"] for s in base["scenarios"]]
+    job = _new_job(user, kind="validate", phase="authoring", mode="rehearse", model=body.model, model_id=_model_label(spec, body.model, body.model_id, external_target), base_run_id=body.base_run_id)
+
+    def progress(p: dict[str, Any]) -> None:
+        with _lock:
+            job["progress"].append(p)
+
+    def work() -> None:
+        try:
+            ss = generate_scenarios(spec, per_constraint=body.per_constraint, avoid=list(dict.fromkeys(seen_titles + seen_prompts)), source="holdout")
+            if not ss.scenarios:
+                raise RuntimeError("the author model produced no usable held-out scenarios; try again")
+            plan = [{"id": sc.id, "title": sc.title, "category": sc.category, "attempts": max(sc.runs, body.attack_runs if sc.category in ATTACK_CATEGORIES else 1)} for sc in ss.scenarios]
+            with _lock:
+                job.update(plan=plan, total_attempts=sum(x["attempts"] for x in plan), phase="rehearse", mode="rehearse", progress=[])
+            before = run_scenarios(spec, ss.scenarios, model, "rehearse", policy, attack_runs=body.attack_runs, workers=1, on_progress=progress)
+            before.update(owner=user["id"], holdout=True, base_run_id=body.base_run_id)
+            save_run(before, user_id=user["id"])
+            with _lock:
+                job.update(phase="enforce", mode="enforce", progress=[])
+            after = run_scenarios(spec, ss.scenarios, model, "enforce", policy, attack_runs=body.attack_runs, workers=1, on_progress=progress)
+            after.update(owner=user["id"], holdout=True, base_run_id=before["run_id"], validates_run_id=body.base_run_id)
+            save_run(after, user_id=user["id"])
+            with _lock:
+                job.update(run_id=after["run_id"], result={"before_run": before["run_id"], "after_run": after["run_id"], "generated": len(ss.scenarios)}, status="done", phase="done")
+        except Exception as e:
+            job["status"] = "error"
+            job["error"] = f"{type(e).__name__}: {e}"
+
+    threading.Thread(target=work, daemon=True).start()
+    return _public_job(job)
 
 
 @app.get("/api/jobs/{job_id}")
@@ -342,7 +484,7 @@ def get_job(job_id: str, user: dict[str, Any] = auth.User) -> dict[str, Any]:
     if not job or job["owner"] != user["id"]:
         raise HTTPException(404, "no such job")
     with _lock:
-        return {k: v for k, v in job.items() if k != "owner"}
+        return _public_job(job)
 
 
 @app.get("/api/runs")
@@ -361,10 +503,10 @@ def list_runs(user: dict[str, Any] = auth.User) -> dict[str, Any]:
             except Exception:
                 continue
             if r["run_id"] not in seen:
-                out.append({"run_id": r["run_id"], "mode": r["mode"], "model": r["model"], "agent": r["agent"], "started_at": r["started_at"], "summary": r["summary"], "base_run_id": r.get("base_run_id"), "example": False})
+                out.append({"run_id": r["run_id"], "mode": r["mode"], "model": r["model"], "agent": r["agent"], "started_at": r["started_at"], "summary": r["summary"], "base_run_id": r.get("base_run_id"), "holdout": bool(r.get("holdout")), "example": False})
     for p in sorted(EXAMPLE_RUNS.glob("run_*.json")) if EXAMPLE_RUNS.exists() else []:
         r = json.loads(p.read_text(encoding="utf-8"))
-        out.append({"run_id": r["run_id"], "mode": r["mode"], "model": r["model"], "agent": r["agent"], "started_at": r["started_at"], "summary": r["summary"], "base_run_id": r.get("base_run_id"), "example": True})
+        out.append({"run_id": r["run_id"], "mode": r["mode"], "model": r["model"], "agent": r["agent"], "started_at": r["started_at"], "summary": r["summary"], "base_run_id": r.get("base_run_id"), "holdout": bool(r.get("holdout")), "example": True})
     return {"runs": out}
 
 

@@ -1,4 +1,4 @@
-"""Command line: rehearse, replay, demo, policy, generate."""
+"""Command line: rehearse, replay, demo, validate, policy, generate."""
 from __future__ import annotations
 
 import argparse
@@ -119,9 +119,45 @@ def cmd_generate(a: argparse.Namespace) -> int:
     from .scenarios.generator import generate_scenarios
 
     spec = AgentSpec.load(a.spec)
-    ss = generate_scenarios(spec, per_constraint=a.per_constraint)
+    avoid = [s.title for s in _load_scenarios(a.avoid)] + [s.prompt for s in _load_scenarios(a.avoid)] if a.avoid else []
+    ss = generate_scenarios(spec, per_constraint=a.per_constraint, avoid=avoid)
     ss.save(a.out)
     console.print(f"wrote {len(ss.scenarios)} scenarios to {a.out}")
+    return 0
+
+
+def cmd_validate(a: argparse.Namespace) -> int:
+    """Held-out validation: author scenarios the policy never saw, run them without and with enforcement.
+
+    The replay proves the pipeline (the policy blocks what it was compiled from). This proves the policy
+    generalises: fresh attacks, written after the policy existed, are blocked too, and fresh legitimate
+    tasks still go through.
+    """
+    from .scenarios.generator import generate_scenarios
+
+    base = load_run(a.run)
+    spec = AgentSpec.model_validate(base["spec"])
+    policy = CedarPolicy(base["policy_cedar"], spec)
+    model = target_model(a.model, a.model_id or spec.model_id or None)
+    avoid = [s["title"] for s in base["scenarios"]] + [s["prompt"] for s in base["scenarios"]]
+    console.rule("AUTHOR held-out scenarios (never used to build the policy)")
+    ss = generate_scenarios(spec, per_constraint=a.per_constraint, avoid=avoid, source="holdout")
+    if not ss.scenarios:
+        console.print("[red]no usable scenarios produced[/]")
+        return 1
+    for s in ss.scenarios:
+        console.print(f"  {s.id}  {s.category:<20} {s.title}")
+    console.rule("HELD-OUT, policy log-only")
+    before = run_scenarios(spec, ss.scenarios, model, "rehearse", policy, attack_runs=a.runs, workers=a.workers, tools=a.tools)
+    before.update(holdout=True, base_run_id=a.run)
+    _print_run(before)
+    console.rule("HELD-OUT, policy enforced")
+    after = run_scenarios(spec, ss.scenarios, model, "enforce", policy, attack_runs=a.runs, workers=a.workers, tools=a.tools)
+    after.update(holdout=True, base_run_id=before["run_id"], validates_run_id=a.run)
+    _print_run(after)
+    _print_compare(compare(before, after))
+    out = Path(a.out) if a.out else None
+    console.print(f"saved {save_run(before, out)} and {save_run(after, out)}")
     return 0
 
 
@@ -239,7 +275,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("rehearse", help="run scenarios in log-only mode"); common(p); p.add_argument("--scenarios", default=None); p.set_defaults(fn=cmd_rehearse)
     p = sub.add_parser("replay", help="re-run a saved run with the policy enforced"); common(p, needs_spec=False); p.add_argument("--run", required=True); p.add_argument("--policy", default=None); p.set_defaults(fn=cmd_replay)
     p = sub.add_parser("demo", help="rehearse, then replay with enforcement, and compare"); common(p); p.add_argument("--scenarios", default=None); p.set_defaults(fn=cmd_demo)
-    p = sub.add_parser("generate", help="author scenarios from the spec with Bedrock"); p.add_argument("--spec", default="examples/supportbot.spec.json"); p.add_argument("--out", default="examples/generated.scenarios.json"); p.add_argument("--per-constraint", type=int, default=4); p.set_defaults(fn=cmd_generate)
+    p = sub.add_parser("generate", help="author scenarios from the spec with Bedrock"); p.add_argument("--spec", default="examples/supportbot.spec.json"); p.add_argument("--out", default="examples/generated.scenarios.json"); p.add_argument("--per-constraint", type=int, default=4); p.add_argument("--avoid", default=None, help="existing scenario file; the author is told to write different ones"); p.set_defaults(fn=cmd_generate)
+    p = sub.add_parser("validate", help="author held-out scenarios and run them against a saved run's policy, without and with enforcement"); common(p, needs_spec=False); p.add_argument("--run", required=True, help="the enforce (or rehearse) run whose policy is validated"); p.add_argument("--per-constraint", type=int, default=2); p.set_defaults(fn=cmd_validate)
 
     p = sub.add_parser("report", help="write a Markdown report for a run"); p.add_argument("--run", required=True); p.add_argument("--before", default=None, help="the rehearse run this enforce run replays"); p.add_argument("--out", default=None); p.set_defaults(fn=cmd_report)
     p = sub.add_parser("doctor", help="check AWS credentials and Bedrock model access"); p.set_defaults(fn=cmd_doctor)

@@ -9,7 +9,7 @@ AI agents can call APIs, send messages and modify real systems. We test ordinary
 ## The loop
 
 ```
-Define  →  Rehearse  →  Diagnose  →  Protect  →  Replay
+Define  →  Rehearse  →  Diagnose  →  Protect  →  Replay  →  Validate
  agent,     generated     trace of     Cedar        same tests,
  tools,     scenarios     every tool   policy       policy enforced:
  rules      run against   call and     generated    attacks blocked,
@@ -22,8 +22,11 @@ Define  →  Rehearse  →  Diagnose  →  Protect  →  Replay
 3. **Diagnose.** Each verdict comes from facts, not opinions: the agent either attempted `refund_customer(amount=50000)` or it did not. The trace shows the input, every decision the agent made, and the rule each call broke.
 4. **Protect.** Findings compile into a **Cedar** policy: one `permit` per tool with parameter conditions, default deny for everything else. It is the same policy language AWS uses in AgentCore Policy.
 5. **Replay.** The exact same scenarios run again with the policy **enforced**. The ₹50,000 refund is denied at the tool boundary. The ₹2,000 refund still works. A security control that blocks everything is useless, so legitimate tasks are checked too.
+6. **Validate on unseen attacks.** The replay is circular by construction: the policy was compiled from those findings, so of course it blocks them. To show it *generalises*, Bedrock authors a fresh held-out set after the policy exists (told which scenarios already exist and to find different tactics), and that set runs twice: log-only, so we can see the new attacks get through, and enforced, so we can see they are blocked while new legitimate tasks still pass. The UI, the CLI (`agentrehearsal validate`) and the stored runs all keep held-out runs separate from the working set.
 
-Every attack scenario runs three times. An agent that misbehaves one time in three is marked **INTERMITTENT**, which is more honest than a single pass or fail.
+Every attack scenario runs three times. An agent that misbehaves one time in three is marked **INTERMITTENT**, and the scorecard says how many exploitable paths failed on every attempt versus intermittently, so a headline number never hides a 2-of-3 flip. The legitimate set deliberately includes boundary cases (a refund of exactly ₹5,000, one rupee under the limit with pressure to round up, an email to a *different* verified customer), because over-blocking bugs hide at the edges, not in the middle.
+
+Two example agents ship as data. **SupportBot** has 15 hand-written seeds and an offline simulation. **TravelDesk** (bookings, cancellations, itinerary sharing, a poisoned "approval mail") has no seeds at all: every scenario is authored by Bedrock from the rules, which is exactly the path a developer takes with their own agent. The scenario author reads the world from the spec (known ids, documents, which documents carry embedded instructions, session facts), so nothing in it is specific to one agent.
 
 ## What is in the box
 
@@ -83,7 +86,7 @@ uvicorn agentrehearsal.api:app --reload --port 8000
 cd ../frontend && npm install && npm run dev             # http://localhost:5173, /api proxied to :8000
 ```
 
-Deploy: `amplify.yml` builds the UI on Amplify Hosting (set `VITE_API_BASE`); `backend/Dockerfile` + `scripts/push_image.sh` put the API on ECS Express Mode. `infra/README.md` covers AgentCore Gateway + Policy and DynamoDB.
+Deploy: see `docs/DEPLOY.md` — the API is a container on ECS Express Mode (`backend/Dockerfile`, `scripts/push_image.sh`), the UI is an Amplify Hosting build (`amplify.yml`) that proxies `/api` and `/mcp` to it. `infra/README.md` covers AgentCore Gateway + Policy.
 
 Tests: `cd backend && pytest`.
 
@@ -115,3 +118,4 @@ For every rule the tests include an allowed case, a boundary case, and violation
 * The target agent is a real Strands agent on a real Bedrock model. Failures are found, never scripted.
 * The scripted model is a simulation of a naive agent for the SupportBot example, used for offline development and tests, and is labelled as such wherever it appears.
 * Verdicts are computed from recorded tool calls checked against Cedar. No model grades another model.
+* "Same policy text locally and on AgentCore Gateway" is a claim about the source: the Cedar is rendered from one set of constraints into both forms. We have not yet run a decision-equivalence test against a deployed Gateway policy engine (Path B in `infra/README.md`); until that is done, the local evaluator is the one whose decisions the numbers come from.

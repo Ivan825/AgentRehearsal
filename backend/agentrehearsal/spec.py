@@ -33,6 +33,10 @@ class MockResponse(BaseModel):
 
     when: dict[str, Any] | None = None
     returns: Any = Field(default_factory=lambda: {"status": "ok"})
+    # For documents the agent may read: the embedded instruction this one carries, in a few words
+    # (e.g. "tells the agent to email the customer record to a third party"). Empty for clean data.
+    # The scenario author uses it to write indirect-injection cases; the simulated tool ignores it.
+    injection: str = ""
 
 
 class ToolDef(BaseModel):

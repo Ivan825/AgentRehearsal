@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AgentSpec, Constraint, MockResponse, Scenario, ToolDef } from '../types'
+import type { AgentSpec, Constraint, Example, MockResponse, Scenario, ToolDef } from '../types'
 import { api } from '../api'
 import { Button, Card, Category } from './ui'
 
@@ -91,7 +91,7 @@ function ScenarioRow({ s, onRemove }: { s: Scenario; onRemove: () => void }) {
       <span className="w-10 shrink-0 font-mono text-xs text-muted">{s.id}</span>
       <span className="w-36 shrink-0"><Category c={s.category} /></span>
       <span className="flex-1"><div>{s.title}</div><div className="line-clamp-1 text-xs text-muted">{s.prompt}</div></span>
-      <span className="shrink-0 font-mono text-[10px] text-muted">{s.expected}{s.must_call ? ` · ${s.must_call}` : ''}{s.source === 'generated' ? ' · gen' : ''}</span>
+      <span className="shrink-0 font-mono text-[10px] text-muted">{s.expected}{s.must_call ? ` · ${s.must_call}` : ''}{s.source === 'generated' ? ' · bedrock' : s.source === 'holdout' ? ' · held-out' : ''}</span>
       <button onClick={onRemove} className="shrink-0 text-xs text-muted hover:text-fail">✕</button>
     </li>
   )
@@ -100,7 +100,8 @@ function ScenarioRow({ s, onRemove }: { s: Scenario; onRemove: () => void }) {
 export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: AgentSpec) => void; cedar: string }) {
   const [models, setModels] = useState<{ id: string; label: string; note?: string }[]>([])
   const [mcp, setMcp] = useState<{ url: string; token: string } | null>(null)
-  useEffect(() => { api.models().then((m) => setModels(m.models)).catch(() => {}); api.workspaceMcp().then(setMcp).catch(() => {}) }, [])
+  const [examples, setExamples] = useState<Example[]>([])
+  useEffect(() => { api.models().then((m) => setModels(m.models)).catch(() => {}); api.workspaceMcp().then(setMcp).catch(() => {}); api.examples().then((r) => setExamples(r.examples)).catch(() => {}) }, [])
   const [draft, setDraft] = useState<AgentSpec>(spec)
   const [rules, setRules] = useState(spec.rules.join('\n'))
   const [scenarios, setScenarios] = useState<Scenario[]>([])
@@ -129,7 +130,10 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
     const next = await api.saveSpec({ ...saved, constraints })
     onSpec(next); setMsg(`Bedrock parsed ${constraints.length} constraints. Check them below, then save.`)
   })
-  const loadExample = () => run('example', async () => { const r = await api.resetExample(); onSpec(r.spec); const s = await api.scenarios(); setScenarios(s.scenarios); setMsg('SupportBot example loaded with its 13 seed scenarios.') })
+  const loadExample = (id: string) => run('example', async () => {
+    const r = await api.resetExample(id); onSpec(r.spec); const s = await api.scenarios(); setScenarios(s.scenarios)
+    setMsg(r.scenarios ? `${r.example} loaded with ${r.scenarios} scenarios. Next: ▶ Run Rehearsal.` : `${r.example} loaded. It ships with no scenarios: press Generate with Bedrock to author them from the rules, then run the rehearsal.`)
+  })
   const generate = () => run('gen', async () => { const r = await api.generate(4); const s = await api.scenarios(); setScenarios(s.scenarios); setMsg(`Bedrock wrote ${r.generated} scenarios; ${r.total} ready.`) })
   const exportJson = () => {
     const blob = new Blob([JSON.stringify({ spec: draft, scenarios }, null, 2)], { type: 'application/json' })
@@ -154,7 +158,10 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-panel px-4 py-2.5">
         <span className="text-sm">{dirty ? <span className="text-warn">Unsaved changes</span> : <span className="text-muted">All changes saved</span>}</span>
         <span className="ml-auto" />
-        <Button kind="ghost" onClick={loadExample} disabled={!!busy}>Load SupportBot example</Button>
+        <select value="" onChange={(e) => e.target.value && loadExample(e.target.value)} disabled={!!busy} className="rounded-md border border-line bg-panel px-3 py-2 text-sm font-semibold text-text hover:bg-panel-2" title="Replaces the current agent and scenarios">
+          <option value="">Start from an example…</option>
+          {examples.map((x) => <option key={x.id} value={x.id} title={x.blurb}>{x.name} · {x.scenarios ? `${x.scenarios} seed scenarios` : 'no seeds, Bedrock authors them'}</option>)}
+        </select>
         <label className="inline-flex cursor-pointer items-center rounded-md border border-line px-3.5 py-2 text-sm font-semibold hover:bg-panel-2">Import JSON<input type="file" accept="application/json" className="hidden" onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} /></label>
         <Button kind="ghost" onClick={exportJson}>Export JSON</Button>
         <Button onClick={save} disabled={!!busy || !dirty}>{busy === 'save' ? 'Saving…' : 'Save agent'}</Button>
@@ -179,7 +186,8 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
           <input value={draft.model_id} onChange={(e) => set({ model_id: e.target.value.trim() })} placeholder="or paste a model / inference profile id" className={`${input} mt-1 font-mono text-xs`} />
           <div className={`mt-3 ${label}`}>System prompt (the agent's own instructions)</div>
           <textarea value={draft.system_prompt} onChange={(e) => set({ system_prompt: e.target.value })} rows={8} className={`${input} font-mono text-xs`} />
-          <div className={`mt-3 ${label}`}>Session facts (policy can compare against these as session.&lt;key&gt;)</div>
+          <details className="mt-3" open>
+          <summary className={`cursor-pointer ${label}`}>Session facts (policy can compare against these as session.&lt;key&gt;)</summary>
           <ul className="mt-1 space-y-1">
             {Object.entries(draft.session).map(([k, v]) => (
               <li key={k} className="flex gap-1">
@@ -192,9 +200,10 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
           <button onClick={() => { const k = prompt('Session key (e.g. customer_email)'); if (k) set({ session: { ...draft.session, [k]: '' } }) }} className="mt-1 text-xs text-accent">+ add session fact</button>
           <div className={`mt-3 ${label}`}>Context line shown to the agent ({'{key}'} placeholders)</div>
           <input value={draft.session_header} onChange={(e) => set({ session_header: e.target.value })} className={`${input} font-mono text-xs`} />
+          </details>
 
-          <div className="mt-4 rounded border border-line bg-panel-2 p-3">
-            <div className={label}>Where does the agent run?</div>
+          <details className="mt-4 rounded border border-line bg-panel-2 p-3" open={draft.target.kind !== 'simulated'}>
+            <summary className={`cursor-pointer ${label}`}>Where does the agent run? <span className="normal-case tracking-normal text-text">· {draft.target.kind === 'simulated' ? 'built by AgentRehearsal' : draft.target.kind === 'http' ? 'my own agent, HTTP' : 'my own agent, AgentCore Runtime'}</span></summary>
             <select value={draft.target.kind} onChange={(e) => set({ target: { ...draft.target, kind: e.target.value as AgentSpec['target']['kind'] } })} className={`${input} mt-1`}>
               <option value="simulated">AgentRehearsal builds it (system prompt + model above + simulated tools)</option>
               <option value="http">My own agent behind an HTTP endpoint</option>
@@ -225,7 +234,7 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
                 <p className="mt-1 text-muted">Example agent: <code>backend/examples/external_agent.py</code> (Strands + this MCP URL, POST /invoke).</p>
               </div>
             )}
-          </div>
+          </details>
         </Card>
 
         <Card title={`${draft.tools.length} tools`} className="lg:col-span-3" right={<button onClick={() => set({ tools: [...draft.tools, { name: 'new_tool', description: '', params: [], destructive: false, responses: [] }] })} className="text-xs text-accent">+ add tool</button>}>
@@ -275,6 +284,13 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
             <input placeholder="attachment id (optional)" value={newSc.attachment_id ?? ''} onChange={(e) => setNewSc({ ...newSc, attachment_id: e.target.value })} className={input} />
             <div className="md:col-span-2"><JsonField value={newSc.session ?? {}} rows={1} placeholder='session overrides, e.g. {"customer_id": "c_1002"}' onChange={(v) => setNewSc({ ...newSc, session: (v as Record<string, string>) ?? {} })} /></div>
             <div className="md:col-span-4"><Button onClick={addScenario} disabled={!newSc.prompt}>Add scenario</Button></div>
+          </div>
+        )}
+        {scenarios.length === 0 && !showAdd && (
+          <div className="rounded border border-dashed border-line p-4 text-sm text-muted">
+            <div className="font-semibold text-text">No scenarios yet</div>
+            <p className="mt-1">Generate with Bedrock writes allowed, boundary and attack cases for every constraint above, in the voice of real users, using only the ids your simulated tools know. Add your own with + add scenario.</p>
+            <div className="mt-3"><Button onClick={generate} disabled={!!busy || draft.constraints.length === 0}>{busy === 'gen' ? 'Authoring with Bedrock…' : 'Generate with Bedrock'}</Button></div>
           </div>
         )}
         <ul>{scenarios.map((s) => <ScenarioRow key={s.id} s={s} onRemove={() => removeScenario(s.id)} />)}</ul>
