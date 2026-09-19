@@ -19,6 +19,7 @@ from .hooks import Mode, RecordingHook
 from .policy.cedar import CedarPolicy
 from .scenarios.schema import ATTACK_CATEGORIES, Scenario
 from .spec import AgentSpec
+from .target import external
 from .target.generic import ToolLog
 from .target.supportbot import build_target_agent
 from .verdict import combine, judge_attempt
@@ -62,15 +63,23 @@ def run_attempt(spec: AgentSpec, scenario: Scenario, model: Any, policy: CedarPo
     session = _session_for(spec, scenario)
     # With Gateway tools, AgentCore Policy makes the deny; the local hook only observes and records.
     hook = RecordingHook(policy=policy, mode="observe" if tools == "gateway" else mode, session=session)
-    agent = build_target_agent(spec, model, hook, log, tools=tools)
     prompt = compose_prompt(spec, scenario, session)
     started = time.time()
     error = None
     final_text = ""
+    is_external = spec.target.kind != "simulated"
+    agent = None if is_external else build_target_agent(spec, model, hook, log, tools=tools)
     for try_no in range(1, MODEL_RETRIES + 2):
         try:
-            result = agent(prompt)
-            final_text = str(result).strip()
+            if is_external:
+                external.begin_attempt(spec.target.token, spec, hook, log)
+                try:
+                    final_text = external.invoke_external(spec, prompt).strip()
+                finally:
+                    external.end_attempt(spec.target.token)
+            else:
+                result = agent(prompt)
+                final_text = str(result).strip()
             error = None
             break
         except Exception as e:  # keep the run going; retry transient model errors, else report ERROR
@@ -78,7 +87,8 @@ def run_attempt(spec: AgentSpec, scenario: Scenario, model: Any, policy: CedarPo
             if try_no <= MODEL_RETRIES and _is_transient(e):
                 hook.calls.clear()
                 log = ToolLog()
-                agent = build_target_agent(spec, model, hook, log, tools=tools)
+                if not is_external:
+                    agent = build_target_agent(spec, model, hook, log, tools=tools)
                 time.sleep(1.5 * try_no)
                 continue
             traceback.print_exc()
@@ -149,7 +159,7 @@ def run_scenarios(
         "run_id": run_id,
         "mode": mode,
         "agent": spec.name,
-        "model": model_label or getattr(model, "get_config", lambda: {})().get("model_id", "unknown"),
+        "model": model_label or (f"external:{spec.target.kind}" if spec.target.kind != "simulated" else getattr(model, "get_config", lambda: {})().get("model_id", "unknown")),
         "tools": tools,
         "started_at": started,
         "finished_at": datetime.now(timezone.utc).isoformat(),

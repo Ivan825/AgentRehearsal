@@ -61,10 +61,32 @@ class Constraint(BaseModel):
     description: str = ""       # one line shown in the UI
 
 
+class TargetConfig(BaseModel):
+    """Where the agent under test lives.
+
+    simulated          AgentRehearsal builds the agent itself: the system prompt above, on `model_id`, with the
+                       simulated tools. This is the default.
+    http               An existing agent behind an HTTP endpoint. AgentRehearsal POSTs each scenario to `url` and
+                       reads the reply. The agent must take its tools from the workspace's MCP endpoint so every
+                       call passes through the policy.
+    agentcore_runtime  Same, for an agent deployed on Amazon Bedrock AgentCore Runtime (`agent_arn`).
+    """
+
+    kind: Literal["simulated", "http", "agentcore_runtime"] = "simulated"
+    url: str = ""
+    auth_header: str = ""          # sent as the Authorization header to `url`, e.g. "Bearer …"
+    prompt_field: str = "prompt"   # JSON field carrying the scenario text
+    response_field: str = ""       # dotted path to the reply text; auto-detected when empty
+    agent_arn: str = ""
+    token: str = ""                # set by the API at run time: identifies the workspace's MCP endpoint
+
+
 class AgentSpec(BaseModel):
     name: str
     purpose: str
     system_prompt: str
+    model_id: str = ""             # Bedrock model (or inference profile) the agent runs on; empty = server default
+    target: TargetConfig = Field(default_factory=TargetConfig)
     tools: list[ToolDef]
     rules: list[str] = Field(default_factory=list)
     constraints: list[Constraint] = Field(default_factory=list)

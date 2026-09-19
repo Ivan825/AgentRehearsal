@@ -5,6 +5,7 @@ Then set AGENTREHEARSAL_DDB_TABLE=agentrehearsal in backend/.env.
 """
 import sys
 import time
+from pathlib import Path
 
 import boto3
 
@@ -24,4 +25,11 @@ except ddb.exceptions.ResourceNotFoundException:
     while ddb.describe_table(TableName=name)["Table"]["TableStatus"] != "ACTIVE":
         time.sleep(2); print(".", end="", flush=True)
     print(" ACTIVE")
-print(f"now add to backend/.env:  AGENTREHEARSAL_DDB_TABLE={name}")
+env = Path(".env")
+text = env.read_text() if env.exists() else ""
+if f"AGENTREHEARSAL_DDB_TABLE={name}" in text:
+    print("backend/.env already points at it")
+else:
+    text = "\n".join(l for l in text.splitlines() if not l.startswith("AGENTREHEARSAL_DDB_TABLE=")) + f"\nAGENTREHEARSAL_DDB_TABLE={name}\n"
+    env.write_text(text)
+    print(f"added AGENTREHEARSAL_DDB_TABLE={name} to backend/.env; restart the API")

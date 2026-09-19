@@ -39,6 +39,7 @@ def test_signup_login_and_isolated_workspaces(client):
     h2 = _signup(client, "two@x.io")
     assert client.post("/api/auth/signup", json={"email": "one@x.io", "password": "password123"}).status_code == 409
     assert client.post("/api/auth/login", json={"email": "one@x.io", "password": "wrong"}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": "One@X.io", "password": "password123"}).status_code == 200
     spec = client.get("/api/spec", headers=h1).json()
     spec["name"] = "Renamed by one"
     assert client.put("/api/spec", json=spec, headers=h1).status_code == 200

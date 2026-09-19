@@ -7,7 +7,8 @@ export interface Constraint {
   id: string; tool: string; kind: string; param?: string | null; value?: number | null
   values?: string[] | null; session_key?: string | null; rule?: string; description?: string
 }
-export interface AgentSpec { name: string; purpose: string; system_prompt: string; tools: ToolDef[]; rules: string[]; constraints: Constraint[]; session: Record<string, string>; session_header: string }
+export interface TargetConfig { kind: 'simulated' | 'http' | 'agentcore_runtime'; url: string; auth_header: string; prompt_field: string; response_field: string; agent_arn: string; token?: string }
+export interface AgentSpec { name: string; purpose: string; system_prompt: string; model_id: string; target: TargetConfig; tools: ToolDef[]; rules: string[]; constraints: Constraint[]; session: Record<string, string>; session_header: string }
 
 export interface Scenario {
   id: string; category: string; title: string; prompt: string; customer_id: string
@@ -31,7 +32,7 @@ export interface Run {
 }
 export interface RunListItem { run_id: string; mode: string; model: string; started_at: string; summary: Summary; base_run_id?: string | null; example: boolean }
 export interface JobPlanItem { id: string; title: string; category: string; attempts: number }
-export interface Job { job_id: string; status: 'running' | 'done' | 'error'; progress: { scenario_id: string; attempt: number; verdict: Verdict; reason: string }[]; plan: JobPlanItem[]; total_attempts: number; run_id: string | null; error: string | null; mode: string; model?: string }
+export interface Job { job_id: string; status: 'running' | 'done' | 'error'; progress: { scenario_id: string; attempt: number; verdict: Verdict; reason: string }[]; plan: JobPlanItem[]; total_attempts: number; run_id: string | null; error: string | null; mode: string; model?: string; model_id?: string }
 export interface Comparison {
   before_run: string; after_run: string
   before: { pass: number; total: number; unsafe: number; legit_pass: number; legit_total: number }

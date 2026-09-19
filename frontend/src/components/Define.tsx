@@ -98,6 +98,9 @@ function ScenarioRow({ s, onRemove }: { s: Scenario; onRemove: () => void }) {
 }
 
 export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: AgentSpec) => void; cedar: string }) {
+  const [models, setModels] = useState<{ id: string; label: string; note?: string }[]>([])
+  const [mcp, setMcp] = useState<{ url: string; token: string } | null>(null)
+  useEffect(() => { api.models().then((m) => setModels(m.models)).catch(() => {}); api.workspaceMcp().then(setMcp).catch(() => {}) }, [])
   const [draft, setDraft] = useState<AgentSpec>(spec)
   const [rules, setRules] = useState(spec.rules.join('\n'))
   const [scenarios, setScenarios] = useState<Scenario[]>([])
@@ -165,6 +168,15 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
           <input value={draft.name} onChange={(e) => set({ name: e.target.value })} className={`${input} text-lg font-semibold`} />
           <div className={`mt-3 ${label}`}>Purpose</div>
           <textarea value={draft.purpose} onChange={(e) => set({ purpose: e.target.value })} rows={3} className={input} />
+          <div className={`mt-3 ${label}`}>Model the agent runs on (Bedrock)</div>
+          <div className="mt-1 flex gap-1">
+            <select value={models.some((m) => m.id === draft.model_id) ? draft.model_id : (draft.model_id ? '__custom' : '')} onChange={(e) => { if (e.target.value !== '__custom') set({ model_id: e.target.value }) }} className={input}>
+              <option value="">Server default</option>
+              {models.map((m) => <option key={m.id} value={m.id}>{m.label}{m.note ? ` · ${m.note}` : ''}</option>)}
+              <option value="__custom">Custom id…</option>
+            </select>
+          </div>
+          <input value={draft.model_id} onChange={(e) => set({ model_id: e.target.value.trim() })} placeholder="or paste a model / inference profile id" className={`${input} mt-1 font-mono text-xs`} />
           <div className={`mt-3 ${label}`}>System prompt (the agent's own instructions)</div>
           <textarea value={draft.system_prompt} onChange={(e) => set({ system_prompt: e.target.value })} rows={8} className={`${input} font-mono text-xs`} />
           <div className={`mt-3 ${label}`}>Session facts (policy can compare against these as session.&lt;key&gt;)</div>
@@ -180,6 +192,40 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
           <button onClick={() => { const k = prompt('Session key (e.g. customer_email)'); if (k) set({ session: { ...draft.session, [k]: '' } }) }} className="mt-1 text-xs text-accent">+ add session fact</button>
           <div className={`mt-3 ${label}`}>Context line shown to the agent ({'{key}'} placeholders)</div>
           <input value={draft.session_header} onChange={(e) => set({ session_header: e.target.value })} className={`${input} font-mono text-xs`} />
+
+          <div className="mt-4 rounded border border-line bg-panel-2 p-3">
+            <div className={label}>Where does the agent run?</div>
+            <select value={draft.target.kind} onChange={(e) => set({ target: { ...draft.target, kind: e.target.value as AgentSpec['target']['kind'] } })} className={`${input} mt-1`}>
+              <option value="simulated">AgentRehearsal builds it (system prompt + model above + simulated tools)</option>
+              <option value="http">My own agent behind an HTTP endpoint</option>
+              <option value="agentcore_runtime">My own agent on Bedrock AgentCore Runtime</option>
+            </select>
+            {draft.target.kind === 'http' && (<>
+              <div className={`mt-2 ${label}`}>Endpoint (POST, JSON)</div>
+              <input value={draft.target.url} onChange={(e) => set({ target: { ...draft.target, url: e.target.value.trim() } })} placeholder="http://127.0.0.1:9000/invoke" className={`${input} font-mono text-xs`} />
+              <div className="mt-1 grid grid-cols-2 gap-1">
+                <input value={draft.target.prompt_field} onChange={(e) => set({ target: { ...draft.target, prompt_field: e.target.value.trim() } })} placeholder="prompt field (prompt)" className={`${input} font-mono text-xs`} />
+                <input value={draft.target.response_field} onChange={(e) => set({ target: { ...draft.target, response_field: e.target.value.trim() } })} placeholder="reply field (auto)" className={`${input} font-mono text-xs`} />
+              </div>
+              <input value={draft.target.auth_header} onChange={(e) => set({ target: { ...draft.target, auth_header: e.target.value } })} placeholder="Authorization header value (optional)" className={`${input} mt-1 font-mono text-xs`} />
+            </>)}
+            {draft.target.kind === 'agentcore_runtime' && (<>
+              <div className={`mt-2 ${label}`}>Agent Runtime ARN</div>
+              <input value={draft.target.agent_arn} onChange={(e) => set({ target: { ...draft.target, agent_arn: e.target.value.trim() } })} placeholder="arn:aws:bedrock-agentcore:us-east-1:…:runtime/…" className={`${input} font-mono text-xs`} />
+            </>)}
+            {draft.target.kind !== 'simulated' && (
+              <div className="mt-3 rounded border border-line bg-ink p-2 text-xs">
+                <div className="font-semibold text-text">Give your agent these tools</div>
+                <p className="mt-1 text-muted">Connect your agent's tools to this MCP endpoint. AgentRehearsal serves the tools defined on this page and judges every call against the policy. Keep the URL private.</p>
+                <div className="mt-1 flex items-center gap-1">
+                  <code className="flex-1 truncate rounded bg-panel px-1.5 py-1">{mcp?.url ?? '…'}</code>
+                  <button onClick={() => mcp && navigator.clipboard?.writeText(mcp.url)} className="rounded border border-line px-2 py-1 text-muted hover:text-text">copy</button>
+                  <button onClick={() => api.rotateMcp().then(setMcp)} className="rounded border border-line px-2 py-1 text-muted hover:text-fail" title="Invalidate the current URL">rotate</button>
+                </div>
+                <p className="mt-1 text-muted">Example agent: <code>backend/examples/external_agent.py</code> (Strands + this MCP URL, POST /invoke).</p>
+              </div>
+            )}
+          </div>
         </Card>
 
         <Card title={`${draft.tools.length} tools`} className="lg:col-span-3" right={<button onClick={() => set({ tools: [...draft.tools, { name: 'new_tool', description: '', params: [], destructive: false, responses: [] }] })} className="text-xs text-accent">+ add tool</button>}>

@@ -11,7 +11,7 @@ export function LiveRun({ job }: { job: Job }) {
   return (
     <Card
       title={`${enforce ? 'Replaying with policy ENFORCED' : 'Rehearsing with policy LOG-ONLY'} · ${done} / ${total} attempts`}
-      right={<span className="text-xs text-muted">{job.model === 'scripted' ? 'scripted offline simulation' : 'live Bedrock target'}</span>}
+      right={<span className="text-xs text-muted">{job.model === 'scripted' ? 'scripted offline simulation' : `live Bedrock target · ${job.model_id ?? ''}`}</span>}
     >
       <div className="mb-3 h-1.5 w-full overflow-hidden rounded bg-panel-2">
         <div className="h-full bg-accent transition-all" style={{ width: `${(done / total) * 100}%` }} />

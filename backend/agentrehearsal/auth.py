@@ -69,8 +69,10 @@ def signup(email: str, password: str, name: str) -> dict[str, Any]:
 
 def login(email: str, password: str) -> dict[str, Any]:
     user = get_store().get_user_by_email(email.strip().lower())
-    if not user or not verify_password(password, user["password"]):
-        raise HTTPException(401, "Wrong email or password.")
+    if not user:
+        raise HTTPException(401, "No account with that email. Create one first.")
+    if not verify_password(password, user["password"]):
+        raise HTTPException(401, "Wrong password.")
     return user
 
 

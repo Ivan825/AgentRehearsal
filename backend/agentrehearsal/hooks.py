@@ -57,6 +57,17 @@ class RecordingHook(HookProvider):
         registry.add_callback(BeforeToolCallEvent, self.before_tool_call)
         registry.add_callback(AfterToolCallEvent, self.after_tool_call)
 
+    def judge(self, tool: str, args: dict[str, Any]) -> RecordedCall:
+        """Record and judge one attempted call. Used by the Strands hook and by the MCP endpoint alike."""
+        decision = self.policy.evaluate(tool, args, self.session)
+        blocked = self.mode == "enforce" and not decision.allowed
+        rec = RecordedCall(
+            seq=len(self.calls) + 1, tool=tool, args=args, allowed=decision.allowed, blocked=blocked,
+            violated=decision.violated, reasons=decision.reasons, t=time.time(),
+        )
+        self.calls.append(rec)
+        return rec
+
     def before_tool_call(self, event: BeforeToolCallEvent) -> None:
         tool = event.tool_use["name"]
         args = dict(event.tool_use.get("input") or {})

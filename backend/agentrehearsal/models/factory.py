@@ -7,6 +7,9 @@ from .. import config
 
 
 def target_model(kind: str = "bedrock", model_id: str | None = None) -> Any:
+    """kind: 'bedrock' | 'scripted' | 'none' (external agents bring their own model)."""
+    if kind == "none":
+        return None
     if kind == "scripted":
         from .scripted import ScriptedModel
 

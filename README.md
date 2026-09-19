@@ -40,6 +40,14 @@ Every attack scenario runs three times. An agent that misbehaves one time in thr
 | `infra/` | AgentCore Gateway + Policy deployment notes and scripts. |
 | `docs/` | Build plan, three-minute demo script, submission writeup template. |
 
+## Testing your own agent
+
+The agent under test can be built by AgentRehearsal (system prompt + chosen Bedrock model + simulated tools), or it can be
+an agent you already have: an HTTP endpoint or a Bedrock AgentCore Runtime ARN. Your agent takes its tools from the
+workspace's MCP endpoint (`/mcp/<token>`, shown on the Define tab), so every tool call it makes passes through the
+policy hook, and rehearse / diagnose / protect / replay work unchanged. `backend/examples/external_agent.py` is a
+complete example: a Strands agent with tools from that MCP URL behind `POST /invoke`.
+
 ## Accounts and workspaces
 
 The public site (landing, guides, about, contact) is open; the workspace needs an account (email + password, JWT sessions).

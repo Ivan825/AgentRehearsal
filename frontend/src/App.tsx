@@ -26,6 +26,9 @@ export default function App() {
   const [spec, setSpec] = useState<AgentSpec | null>(null)
   const [cedar, setCedar] = useState('')
   const [model, setModel] = useState<'bedrock' | 'scripted'>('bedrock')
+  const [models, setModels] = useState<{ id: string; label: string; note?: string }[]>([])
+  const [modelId, setModelId] = useState<string>(() => { try { return localStorage.getItem('ar-model') || '' } catch { return '' } })
+  useEffect(() => { try { localStorage.setItem('ar-model', modelId) } catch { /* ignore */ } }, [modelId])
   const [runs, setRuns] = useState<RunListItem[]>([])
   const [before, setBefore] = useState<Run | null>(null)
   const [after, setAfter] = useState<Run | null>(null)
@@ -43,6 +46,7 @@ export default function App() {
   useEffect(() => {
     api.spec().then(setSpec).catch((e) => setErr(String(e)))
     api.policy().then((p) => setCedar(p.cedar)).catch(() => {})
+    api.models().then((m) => { setModels(m.models); setModelId((cur) => cur || m.default) }).catch(() => {})
     refreshRuns()
   }, [refreshRuns])
 
@@ -69,7 +73,7 @@ export default function App() {
   async function rehearse() {
     setErr(null); setAfter(null); setCmp(null); setSelected(null)
     try {
-      const j = await api.startRun({ mode: 'rehearse', model, attack_runs: 3, workers: 1 })
+      const j = await api.startRun({ mode: 'rehearse', model, model_id: model === 'bedrock' ? (spec?.model_id || modelId || null) : null, attack_runs: 3, workers: 1 })
       setStage('rehearse')
       watch(j, (r) => setBefore(r))
     } catch (e) { setErr(String(e)) }
@@ -79,7 +83,7 @@ export default function App() {
     if (!before) return
     setErr(null)
     try {
-      const j = await api.startRun({ mode: 'enforce', model, attack_runs: 3, workers: 1, base_run_id: before.run_id, cedar })
+      const j = await api.startRun({ mode: 'enforce', model, model_id: model === 'bedrock' ? (spec?.model_id || modelId || null) : null, attack_runs: 3, workers: 1, base_run_id: before.run_id, cedar })
       setStage('replay')
       watch(j, async (r) => { setAfter(r); setCmp(await api.compare(before.run_id, r.run_id)) })
     } catch (e) { setErr(String(e)) }
@@ -119,10 +123,14 @@ export default function App() {
               {theme === 'dark' ? '☀' : '☾'}
             </button>
             {user && <button onClick={() => { session.clear(); nav('/') }} className="rounded-md border border-line px-2.5 py-1.5 text-xs text-muted hover:text-text">Sign out</button>}
-            <select value={model} onChange={(e) => setModel(e.target.value as 'bedrock' | 'scripted')} className="rounded border border-line bg-panel-2 px-2 py-1.5 text-xs">
-              <option value="bedrock">Target model: Bedrock</option>
-              <option value="scripted">Target model: scripted (offline sim)</option>
-            </select>
+            <div className="hidden items-center gap-2 rounded border border-line bg-panel-2 px-2 py-1.5 text-xs md:flex" title="Set on the Define tab">
+              <span className="text-muted">Agent</span><span className="font-semibold">{spec?.name ?? '…'}</span>
+              <span className="text-muted">on</span>
+              <span className="font-mono">{spec?.target?.kind === 'http' ? 'external · HTTP' : spec?.target?.kind === 'agentcore_runtime' ? 'external · AgentCore' : (models.find((m) => m.id === (spec?.model_id || modelId))?.label ?? spec?.model_id ?? modelId ?? 'default')}</span>
+            </div>
+            <label className="flex items-center gap-1.5 rounded border border-line px-2 py-1.5 text-xs text-muted" title="Offline simulation of a naive agent (no AWS)">
+              <input type="checkbox" checked={model === 'scripted'} onChange={(e) => setModel(e.target.checked ? 'scripted' : 'bedrock')} /> offline sim
+            </label>
             <Button onClick={rehearse} disabled={running || !spec}>{running && job?.mode === 'rehearse' ? 'Rehearsing…' : '▶ Run Rehearsal'}</Button>
           </div>
         </div>

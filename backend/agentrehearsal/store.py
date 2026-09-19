@@ -119,7 +119,7 @@ class DynamoStore:
         from boto3.dynamodb.conditions import Key
 
         resp = self.table.query(KeyConditionExpression=Key("pk").eq(f"ACCOUNT#{user_id}") & Key("sk").begins_with("RUN#"),
-                                ProjectionExpression="run_id, #m, model, agent, started_at, base_run_id, summary", ExpressionAttributeNames={"#m": "mode"})
+                                ProjectionExpression="run_id, #m, #mo, #ag, started_at, base_run_id, summary", ExpressionAttributeNames={"#m": "mode", "#mo": "model", "#ag": "agent"})
         rows = resp.get("Items", [])
         for r in rows:
             r["summary"] = json.loads(json.dumps(r["summary"], default=float))

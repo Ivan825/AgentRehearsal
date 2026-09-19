@@ -70,7 +70,7 @@ def cmd_policy(a: argparse.Namespace) -> int:
 def cmd_rehearse(a: argparse.Namespace) -> int:
     spec = AgentSpec.load(a.spec)
     scenarios = _load_scenarios(a.scenarios)
-    model = target_model(a.model, a.model_id)
+    model = target_model(a.model, a.model_id or spec.model_id or None)
     policy = CedarPolicy.from_spec(spec)
     with console.status("Rehearsing..."):
         rec = run_scenarios(spec, scenarios, model, "rehearse", policy, attack_runs=a.runs, workers=a.workers,
@@ -85,7 +85,7 @@ def cmd_replay(a: argparse.Namespace) -> int:
     before = load_run(a.run)
     spec = AgentSpec.model_validate(before["spec"])
     scenarios = scenarios_from_run(before)
-    model = target_model(a.model, a.model_id)
+    model = target_model(a.model, a.model_id or spec.model_id or None)
     policy = CedarPolicy(Path(a.policy).read_text() if a.policy else before["policy_cedar"], spec)
     with console.status("Replaying with enforcement..."):
         after = run_scenarios(spec, scenarios, model, "enforce", policy, attack_runs=a.runs, workers=a.workers, tools=a.tools)
@@ -99,7 +99,7 @@ def cmd_replay(a: argparse.Namespace) -> int:
 def cmd_demo(a: argparse.Namespace) -> int:
     spec = AgentSpec.load(a.spec)
     scenarios = _load_scenarios(a.scenarios)
-    model = target_model(a.model, a.model_id)
+    model = target_model(a.model, a.model_id or spec.model_id or None)
     policy = CedarPolicy.from_spec(spec)
     console.rule("REHEARSE (policy in log-only mode)")
     before = run_scenarios(spec, scenarios, model, "rehearse", policy, attack_runs=a.runs, workers=a.workers, tools=a.tools)
@@ -189,6 +189,37 @@ def cmd_doctor(a: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_users(a: argparse.Namespace) -> int:
+    """Account admin from the terminal: list users, or reset a password."""
+    from .auth import hash_password
+    from .store import get_store
+
+    store = get_store()
+    if a.action == "reset-password":
+        if not a.email or not a.password:
+            console.print("[red]usage: users reset-password --email you@x.io --password newpass[/]")
+            return 1
+        user = store.get_user_by_email(a.email)
+        if not user:
+            console.print(f"[red]no account for {a.email}[/]")
+            return 1
+        if len(a.password) < 8:
+            console.print("[red]password must be at least 8 characters[/]")
+            return 1
+        user["password"] = hash_password(a.password)
+        store.put_user(user)
+        console.print(f"[green]password updated for {a.email}[/]")
+        return 0
+    if a.action == "list":
+        if hasattr(store, "_read"):
+            for email, u in store._read("users").items():
+                console.print(f"{email}  created {u.get('created_at')}")
+        else:
+            console.print("listing is only available for the file store; use the DynamoDB console for the table")
+        return 0
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="agentrehearsal", description="Crash-test your AI agent before your users do.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -212,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("report", help="write a Markdown report for a run"); p.add_argument("--run", required=True); p.add_argument("--before", default=None, help="the rehearse run this enforce run replays"); p.add_argument("--out", default=None); p.set_defaults(fn=cmd_report)
     p = sub.add_parser("doctor", help="check AWS credentials and Bedrock model access"); p.set_defaults(fn=cmd_doctor)
+    p = sub.add_parser("users", help="list accounts or reset a password"); p.add_argument("action", choices=["list", "reset-password"]); p.add_argument("--email", default=None); p.add_argument("--password", default=None); p.set_defaults(fn=cmd_users)
 
     a = ap.parse_args(argv)
     return a.fn(a)

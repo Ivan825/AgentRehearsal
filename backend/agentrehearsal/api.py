@@ -12,9 +12,9 @@ import threading
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 from . import auth, config
@@ -24,6 +24,8 @@ from .runner import compare, load_run, run_scenarios, save_run, scenarios_from_r
 from .scenarios.schema import ATTACK_CATEGORIES, Scenario, ScenarioSet, seeds_path
 from .spec import AgentSpec, ToolDef, ToolParam
 from .store import get_store
+from .target import external
+import secrets
 
 app = FastAPI(title="AgentRehearsal API", version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -37,21 +39,25 @@ _jobs: dict[str, dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
+_mcp_tokens: dict[str, str] = {}   # token -> user_id
+
+
 def _project(user: dict[str, Any]) -> dict[str, Any]:
     uid = user["id"]
     if uid not in _projects:
         saved = get_store().get_project(uid)
         if saved:
-            _projects[uid] = {"spec": AgentSpec.model_validate(saved["spec"]), "scenarios": [Scenario.model_validate(s) for s in saved["scenarios"]]}
+            _projects[uid] = {"spec": AgentSpec.model_validate(saved["spec"]), "scenarios": [Scenario.model_validate(s) for s in saved["scenarios"]], "mcp_token": saved.get("mcp_token") or secrets.token_urlsafe(24)}
         else:
-            _projects[uid] = {"spec": AgentSpec.load(DEFAULT_SPEC), "scenarios": ScenarioSet.load(seeds_path()).scenarios}
+            _projects[uid] = {"spec": AgentSpec.load(DEFAULT_SPEC), "scenarios": ScenarioSet.load(seeds_path()).scenarios, "mcp_token": secrets.token_urlsafe(24)}
+        _mcp_tokens[_projects[uid]["mcp_token"]] = uid
     return _projects[uid]
 
 
 def _persist(user: dict[str, Any]) -> None:
     p = _project(user)
     try:
-        get_store().put_project(user["id"], {"spec": p["spec"].model_dump(), "scenarios": [s.model_dump() for s in p["scenarios"]]})
+        get_store().put_project(user["id"], {"spec": p["spec"].model_dump(), "scenarios": [s.model_dump() for s in p["scenarios"]], "mcp_token": p["mcp_token"]})
     except Exception as e:  # persistence is best effort
         print(f"[store] project not saved: {e}")
 
@@ -84,6 +90,54 @@ def login(body: Credentials) -> dict[str, Any]:
 @app.get("/api/auth/me")
 def me(user: dict[str, Any] = auth.User) -> dict[str, Any]:
     return user
+
+
+# ---- bring your own agent: the workspace's MCP tool endpoint -------------------------------
+
+@app.get("/api/workspace/mcp")
+def workspace_mcp(request: Request, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    p = _project(user)
+    base = str(request.base_url).rstrip("/")
+    return {"token": p["mcp_token"], "url": f"{base}/mcp/{p['mcp_token']}", "tools": [t.name for t in p["spec"].tools]}
+
+
+@app.post("/api/workspace/mcp/rotate")
+def workspace_mcp_rotate(request: Request, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    p = _project(user)
+    _mcp_tokens.pop(p["mcp_token"], None)
+    p["mcp_token"] = secrets.token_urlsafe(24)
+    _mcp_tokens[p["mcp_token"]] = user["id"]
+    _persist(user)
+    return workspace_mcp(request, user)
+
+
+@app.post("/mcp/{token}")
+async def mcp_endpoint(token: str, request: Request):
+    """MCP (streamable HTTP, JSON responses) serving the workspace's simulated tools to an external agent."""
+    uid = _mcp_tokens.get(token)
+    if uid is None:
+        # Tokens are registered when a workspace is loaded; after an API restart the owner must open the workspace once.
+        raise HTTPException(404, "unknown MCP token; open the workspace (Define tab) once, then retry")
+    spec: AgentSpec = _projects[uid]["spec"]
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "expected a JSON-RPC message")
+    messages = body if isinstance(body, list) else [body]
+    responses = [r for r in (external.mcp_handle(token, spec, m) for m in messages if isinstance(m, dict)) if r is not None]
+    if not responses:
+        return Response(status_code=202)
+    return JSONResponse(responses[0] if not isinstance(body, list) else responses)
+
+
+@app.get("/mcp/{token}")
+def mcp_get(token: str):
+    return Response(status_code=405)
+
+
+@app.delete("/mcp/{token}")
+def mcp_delete(token: str):
+    return Response(status_code=200)
 
 
 # ---- spec, rules, policy -----------------------------------------------------------------
@@ -247,14 +301,18 @@ def start_run(body: RunIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
     if problems:
         raise HTTPException(400, f"policy does not parse: {problems}")
     policy = CedarPolicy(cedar, spec)
+    external_target = spec.target.kind != "simulated" and body.model != "scripted"
+    if external_target:
+        spec = spec.model_copy(deep=True)
+        spec.target.token = proj["mcp_token"]
     try:
-        model = target_model(body.model, body.model_id)
+        model = target_model("none" if external_target else body.model, body.model_id or spec.model_id or None)
     except Exception as e:
         raise HTTPException(400, str(e))
 
     job_id = f"job_{len(_jobs) + 1:04d}"
     plan = [{"id": sc.id, "title": sc.title, "category": sc.category, "attempts": max(sc.runs, body.attack_runs if sc.category in ATTACK_CATEGORIES else 1)} for sc in scenarios]
-    job = {"job_id": job_id, "owner": user["id"], "status": "running", "progress": [], "plan": plan, "total_attempts": sum(x["attempts"] for x in plan), "run_id": None, "error": None, "mode": body.mode, "model": body.model}
+    job = {"job_id": job_id, "owner": user["id"], "status": "running", "progress": [], "plan": plan, "total_attempts": sum(x["attempts"] for x in plan), "run_id": None, "error": None, "mode": body.mode, "model": body.model, "model_id": ("external:" + spec.target.kind) if external_target else ((body.model_id or spec.model_id or config.TARGET_MODEL_ID) if body.model == "bedrock" else "scripted")}
     _jobs[job_id] = job
 
     def progress(p: dict[str, Any]) -> None:
@@ -343,6 +401,39 @@ def contact(body: ContactIn) -> dict[str, Any]:
         raise HTTPException(400, "Please add a valid email and a message.")
     get_store().put_message(body.model_dump())
     return {"ok": True}
+
+
+CURATED_MODELS = [
+    {"id": "us.amazon.nova-micro-v1:0", "label": "Amazon Nova Micro", "note": "smallest, fails attacks most"},
+    {"id": "us.amazon.nova-lite-v1:0", "label": "Amazon Nova Lite", "note": "default"},
+    {"id": "us.amazon.nova-pro-v1:0", "label": "Amazon Nova Pro"},
+    {"id": "us.anthropic.claude-3-5-haiku-20241022-v1:0", "label": "Claude 3.5 Haiku"},
+    {"id": "us.anthropic.claude-sonnet-4-20250514-v1:0", "label": "Claude Sonnet 4"},
+    {"id": "us.meta.llama3-3-70b-instruct-v1:0", "label": "Llama 3.3 70B"},
+]
+
+
+@app.get("/api/models")
+def list_models(user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """Models the target agent can run on: a curated list, plus the account's active inference profiles when reachable."""
+    out = {m["id"]: dict(m) for m in CURATED_MODELS}
+    out[config.TARGET_MODEL_ID] = out.get(config.TARGET_MODEL_ID, {"id": config.TARGET_MODEL_ID, "label": config.TARGET_MODEL_ID})
+    out[config.TARGET_MODEL_ID]["note"] = "default"
+    live = False
+    try:
+        import boto3
+
+        br = boto3.client("bedrock", region_name=config.AWS_REGION)
+        for prof in br.list_inference_profiles(maxResults=100).get("inferenceProfileSummaries", []):
+            if prof.get("status") != "ACTIVE":
+                continue
+            pid = prof["inferenceProfileId"]
+            if pid not in out and pid.startswith(("us.", "global.")):
+                out[pid] = {"id": pid, "label": prof.get("inferenceProfileName", pid)}
+        live = True
+    except Exception as e:
+        print(f"[models] live listing unavailable: {e}")
+    return {"models": list(out.values()), "default": config.TARGET_MODEL_ID, "live": live}
 
 
 @app.get("/api/health")

@@ -43,9 +43,12 @@ export const api = {
   validatePolicy: (cedar: string) => j<{ problems: string[] }>('/api/policy/validate', { method: 'POST', body: JSON.stringify({ cedar }) }),
   scenarios: () => j<{ scenarios: Scenario[] }>('/api/scenarios'),
   generate: (per_constraint = 4) => j<{ generated: number; total: number }>('/api/scenarios/generate', { method: 'POST', body: JSON.stringify({ per_constraint, append: true }) }),
-  startRun: (body: { mode: 'rehearse' | 'enforce'; model: 'bedrock' | 'scripted'; attack_runs?: number; workers?: number; base_run_id?: string; cedar?: string }) =>
+  startRun: (body: { mode: 'rehearse' | 'enforce'; model: 'bedrock' | 'scripted'; model_id?: string | null; attack_runs?: number; workers?: number; base_run_id?: string; cedar?: string }) =>
     j<Job>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
   job: (id: string) => j<Job>(`/api/jobs/${id}`),
+  models: () => j<{ models: { id: string; label: string; note?: string }[]; default: string; live: boolean }>('/api/models'),
+  workspaceMcp: () => j<{ token: string; url: string; tools: string[] }>('/api/workspace/mcp'),
+  rotateMcp: () => j<{ token: string; url: string; tools: string[] }>('/api/workspace/mcp/rotate', { method: 'POST' }),
   runs: () => j<{ runs: RunListItem[] }>('/api/runs'),
   run: (id: string) => j<Run>(`/api/runs/${id}`),
   reportUrl: (id: string) => `${BASE}/api/runs/${id}/report.md`,
