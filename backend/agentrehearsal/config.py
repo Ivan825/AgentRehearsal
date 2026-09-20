@@ -11,7 +11,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 TARGET_MODEL_ID = os.getenv("AGENTREHEARSAL_TARGET_MODEL", "us.amazon.nova-lite-v1:0")
-AUTHOR_MODEL_ID = os.getenv("AGENTREHEARSAL_AUTHOR_MODEL", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+AUTHOR_MODEL_ID = os.getenv("AGENTREHEARSAL_AUTHOR_MODEL", "global.anthropic.claude-opus-4-6-v1")
 RUNS_DIR = Path(os.getenv("AGENTREHEARSAL_RUNS_DIR", "runs"))
 
 # The principal name used in Cedar requests. One agent per project for now.

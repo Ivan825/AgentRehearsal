@@ -380,7 +380,7 @@ def generate_endpoint(body: GenerateIn, user: dict[str, Any] = auth.User) -> dic
             _persist(user)
         except Exception as e:
             job["status"] = "error"
-            job["error"] = f"scenario generation failed: {type(e).__name__}: {e}" + ("  → the author model is retired on Bedrock; set AGENTREHEARSAL_AUTHOR_MODEL in backend/.env to an active one (e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0) and restart the API." if "Legacy" in str(e) else "")
+            job["error"] = f"scenario generation failed: {type(e).__name__}: {e}" + ("  → the author model is retired on Bedrock; set AGENTREHEARSAL_AUTHOR_MODEL in backend/.env to an active one (e.g. global.anthropic.claude-opus-4-6-v1) and restart the API." if "Legacy" in str(e) else "")
 
     threading.Thread(target=work, daemon=True).start()
     return _public_job(job)
@@ -931,7 +931,7 @@ CURATED_MODELS = [
     {"id": "us.amazon.nova-lite-v1:0", "label": "Amazon Nova Lite", "note": "default", "provider": "bedrock"},
     {"id": "us.amazon.nova-pro-v1:0", "label": "Amazon Nova Pro", "provider": "bedrock"},
     {"id": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "label": "Claude Haiku 4.5", "provider": "bedrock"},
-    {"id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "label": "Claude Sonnet 4.5", "provider": "bedrock"},
+    {"id": "global.anthropic.claude-opus-4-6-v1", "label": "Claude Opus 4.6", "provider": "bedrock"},
     {"id": "us.meta.llama3-3-70b-instruct-v1:0", "label": "Llama 3.3 70B", "provider": "bedrock"},
 ]
 

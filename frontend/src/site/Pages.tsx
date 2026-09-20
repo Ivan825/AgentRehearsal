@@ -35,16 +35,25 @@ export function GuidesIndex() {
   return (
     <Page>
       <h1 className="text-4xl font-bold tracking-tight">Guides</h1>
-      <p className="mt-3 text-muted">Short, practical, in the order you will need them.</p>
-      <ul className="mt-8 space-y-3">
-        {GUIDES.map((g, i) => (
-          <li key={g.slug}><Link to={`/guides/${g.slug}`} className="block rounded-xl border border-line bg-panel p-5 transition hover:border-accent/50">
-            <div className="font-mono text-xs text-accent">{String(i + 1).padStart(2, '0')}</div>
-            <div className="mt-1 text-lg font-semibold">{g.title}</div>
-            <div className="mt-1 text-sm text-muted">{g.summary}</div>
-          </Link></li>
-        ))}
-      </ul>
+      <p className="mt-3 text-muted">Step by step, in the order you will need them. The middle group is the five ways to put an agent under test.</p>
+      {[
+        { h: 'Start here', items: GUIDES.filter((g) => g.slug === 'getting-started') },
+        { h: 'Defining the agent under test: five ways', items: GUIDES.filter((g) => g.slug.startsWith('define-')) },
+        { h: 'Rules, scenarios, fixes, AWS', items: GUIDES.filter((g) => g.slug !== 'getting-started' && !g.slug.startsWith('define-')) },
+      ].map((grp) => (
+        <section key={grp.h} className="mt-8">
+          <h2 className="text-[11px] uppercase tracking-wider text-muted">{grp.h}</h2>
+          <ul className="mt-3 space-y-3">
+            {grp.items.map((g) => (
+              <li key={g.slug}><Link to={`/guides/${g.slug}`} className="block rounded-xl border border-line bg-panel p-5 transition hover:border-accent/50">
+                <div className="font-mono text-xs text-accent">{String(GUIDES.indexOf(g) + 1).padStart(2, '0')}</div>
+                <div className="mt-1 text-lg font-semibold">{g.title}</div>
+                <div className="mt-1 text-sm text-muted">{g.summary}</div>
+              </Link></li>
+            ))}
+          </ul>
+        </section>
+      ))}
     </Page>
   )
 }
@@ -62,7 +71,9 @@ export function GuidePage() {
       {g.sections.map((s) => (
         <section key={s.h} className="mt-8">
           <h2 className="text-xl font-semibold">{s.h}</h2>
-          {s.p.map((p, k) => <p key={k} className="mt-2 text-muted">{p}</p>)}
+          {s.p.map((p, k) => /^\d+ · /.test(p)
+            ? <p key={k} className="mt-2 flex gap-3 text-muted"><span className="shrink-0 font-mono text-xs text-accent">{p.slice(0, p.indexOf(' · '))}</span><span>{p.slice(p.indexOf(' · ') + 3)}</span></p>
+            : <p key={k} className="mt-2 text-muted">{p}</p>)}
           {s.code && <pre className="mt-3 overflow-auto rounded-lg border border-line bg-panel p-3 text-xs">{s.code}</pre>}
         </section>
       ))}

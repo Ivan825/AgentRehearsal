@@ -39,7 +39,7 @@ AWS_REGION=us-east-1
 AGENTREHEARSAL_DDB_TABLE=agentrehearsal
 AGENTREHEARSAL_JWT_SECRET=<openssl rand -hex 32>
 AGENTREHEARSAL_TARGET_MODEL=us.amazon.nova-lite-v1:0
-AGENTREHEARSAL_AUTHOR_MODEL=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+AGENTREHEARSAL_AUTHOR_MODEL=global.anthropic.claude-opus-4-6-v1
 AGENTREHEARSAL_PUBLIC_URL=https://<app>.amplifyapp.com      # add after step 3; the MCP URL is built from it
 ```
 
