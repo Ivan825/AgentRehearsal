@@ -49,9 +49,13 @@ def provider_available(provider: str) -> bool:
 def _build(model_id: str, temperature: float) -> Any:
     provider, mid = split_model_id(model_id)
     if provider == "bedrock":
+        from botocore.config import Config as BotoConfig
         from strands.models import BedrockModel
 
-        return BedrockModel(model_id=mid, region_name=config.AWS_REGION, temperature=temperature)
+        # bounded waits: a throttled or hung Bedrock call must fail within ~2 minutes and be reported as an
+        # attempt error, not sit for the default 60 s x 5 retries and look like a frozen run
+        boto_cfg = BotoConfig(connect_timeout=10, read_timeout=90, retries={"max_attempts": 3, "mode": "adaptive"})
+        return BedrockModel(model_id=mid, region_name=config.AWS_REGION, temperature=temperature, boto_client_config=boto_cfg)
     key = provider_key(provider)
     if not key:
         raise ValueError(f"{PROVIDERS[provider]['label']} models need {PROVIDERS[provider]['env']} set on the server")

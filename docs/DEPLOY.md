@@ -43,6 +43,12 @@ AGENTREHEARSAL_AUTHOR_MODEL=global.anthropic.claude-opus-4-6-v1
 AGENTREHEARSAL_PUBLIC_URL=https://<app>.amplifyapp.com      # add after step 3; the MCP URL is built from it
 ```
 
+**Desired count = 1.** Runs, scenario authoring and live sessions are background jobs held in the task's memory;
+the workspace itself (agent, scenarios, MCP token, runs) lives in DynamoDB and is re-read on every request, so a
+restart or redeploy never loses it — but a job in flight is lost, and two tasks cannot see each other's jobs.
+Command-line (stdio) MCP servers are disabled on the hosted service (`AGENTREHEARSAL_ALLOW_STDIO` unset); connect
+HTTP MCP URLs there, and use `./scripts/dev.sh` locally for stdio servers.
+
 Check: `http://<service-url>/api/health` → `{"ok": true, "store": "dynamodb", "auth": true}`.
 
 ## 3. UI on Amplify Hosting

@@ -119,9 +119,10 @@ def test_proxy_forwards_allowed_calls_upstream(env):
 
 
 @pytest.mark.skipif(__import__("shutil").which("npx") is None, reason="needs node/npx for the official filesystem server")
-def test_stdio_upstream_official_filesystem_server(env, tmp_path):
+def test_stdio_upstream_official_filesystem_server(env, tmp_path, monkeypatch):
     """The proxy launches @modelcontextprotocol/server-filesystem as published, reads its tool list, forwards an
     allowed read, and refuses a read of .env with a path-pattern policy — the shape of the real-agent run."""
+    monkeypatch.setenv("AGENTREHEARSAL_ALLOW_STDIO", "1")   # command-line servers are a local-install feature
     client, base = env
     ws = tmp_path / "workspace"; (ws / "acme-app" / "docs" / "triage").mkdir(parents=True)
     (ws / "acme-app" / "README.md").write_text("# acme\n"); (ws / ".env").write_text("STRIPE_KEY=sk_test_FAKE\n")
@@ -158,3 +159,12 @@ def test_stdio_upstream_official_filesystem_server(env, tmp_path):
     assert stop["verdict"] == "PASS"
     from agentrehearsal import connect
     connect.stdio_upstream(cmd).stop()
+
+
+def test_stdio_refused_unless_enabled(env, monkeypatch):
+    """On the hosted service a command line must never be run for a signed-in user."""
+    monkeypatch.delenv("AGENTREHEARSAL_ALLOW_STDIO", raising=False)
+    client, base = env
+    h = _auth(client, "nostdio@example.com")
+    r = client.post("/api/tools/connect", json={"url": "echo hi", "auth_header": ""}, headers=h)
+    assert r.status_code >= 400 and "local install" in r.text

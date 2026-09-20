@@ -28,6 +28,9 @@ def _secret() -> str:
     s = os.getenv("AGENTREHEARSAL_JWT_SECRET")
     if s:
         return s
+    if os.getenv("AGENTREHEARSAL_DDB_TABLE"):
+        # a shared deployment: every instance and every deploy must sign with the same secret, or sessions break
+        print("[auth] WARNING: AGENTREHEARSAL_JWT_SECRET is not set; sessions will not survive a restart or a second instance")
     p = Path(__file__).resolve().parent.parent / "data" / ".jwt_secret"
     p.parent.mkdir(parents=True, exist_ok=True)
     if not p.exists():

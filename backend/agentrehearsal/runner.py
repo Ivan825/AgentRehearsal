@@ -217,7 +217,9 @@ def summarize(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def save_run(record: dict[str, Any], runs_dir: Path | None = None, user_id: str = "cli") -> Path:
+def save_run(record: dict[str, Any], runs_dir: Path | None = None, user_id: str = "cli", strict: bool = False) -> Path:
+    """Write the run as JSON and into the store. strict=True (the API) raises when the store rejects it, so a job
+    never reports a run id that cannot be opened."""
     d = runs_dir or config.RUNS_DIR
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{record['run_id']}.json"
@@ -226,8 +228,10 @@ def save_run(record: dict[str, Any], runs_dir: Path | None = None, user_id: str 
         from .store import put_run
 
         put_run(record, user_id=user_id)
-    except Exception as e:  # the store is best effort; never fail a run over it
+    except Exception as e:  # for the CLI the store is best effort
         print(f"[store] skipped: {e}")
+        if strict:
+            raise RuntimeError(f"run finished but could not be stored: {type(e).__name__}: {str(e)[:200]}") from e
     return p
 
 

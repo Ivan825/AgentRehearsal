@@ -18,7 +18,8 @@ export function Protect({ run, after, cedar, compiledCedar, onCedar, onReplay, b
   const [afterAnalysis, setAfterAnalysis] = useState<Analysis | null>(null)
   const [applied, setApplied] = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
-  useEffect(() => { api.validatePolicy(cedar).then((r) => setProblems(r.problems)).catch(() => {}) }, [cedar])
+  useEffect(() => { setApplied(false) }, [hardened])   // a new hardened prompt can be applied again
+  useEffect(() => { let live = true; api.validatePolicy(cedar).then((r) => { if (live) setProblems(r.problems) }).catch(() => {}); return () => { live = false } }, [cedar])
   useEffect(() => { setSurface(null); setAnalysis(null); if (run) { api.surface(run.run_id).then(setSurface).catch(() => {}); api.analysis(run.run_id).then(setAnalysis).catch(() => {}) } }, [run])
   useEffect(() => { setAfterAnalysis(null); if (after) api.analysis(after.run_id).then(setAfterAnalysis).catch(() => {}) }, [after])
   const diff = compiledCedar && cedar !== compiledCedar ? lineDiff(compiledCedar, cedar) : null

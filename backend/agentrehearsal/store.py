@@ -25,6 +25,11 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _version() -> str:
+    """Write stamp for project records: sortable, unique per write (two writes in one second still differ)."""
+    return f"{_now()}#{time.time_ns() % 1_000_000_000:09d}"
+
+
 def _pack(obj: Any) -> str:
     return base64.b64encode(gzip.compress(json.dumps(obj, default=str).encode("utf-8"))).decode("ascii")
 
@@ -60,9 +65,24 @@ class FileStore:
     def get_project(self, user_id: str) -> dict[str, Any] | None:
         return self._read("projects").get(user_id)
 
-    def put_project(self, user_id: str, project: dict[str, Any]) -> None:
+    def put_project(self, user_id: str, project: dict[str, Any]) -> str:
+        ver = _version()
         with _lock:
-            d = self._read("projects"); d[user_id] = {**project, "updated_at": _now()}; self._write("projects", d)
+            d = self._read("projects"); d[user_id] = {**project, "updated_at": ver}; self._write("projects", d)
+        return ver
+
+    def project_version(self, user_id: str) -> str | None:
+        p = self._read("projects").get(user_id)
+        return p.get("updated_at") if p else None
+
+    def user_by_mcp_token(self, token: str) -> str | None:
+        for uid, p in self._read("projects").items():
+            if p.get("mcp_token") == token:
+                return uid
+        return None
+
+    def forget_mcp_token(self, token: str) -> None:
+        return None
 
     # runs
     def put_run(self, user_id: str, record: dict[str, Any]) -> None:
@@ -102,11 +122,32 @@ class DynamoStore:
         self.table.put_item(Item={"pk": f"USER#{user['email'].lower()}", "sk": "PROFILE", "data": user})
 
     def get_project(self, user_id: str) -> dict[str, Any] | None:
-        item = self.table.get_item(Key={"pk": f"ACCOUNT#{user_id}", "sk": "PROJECT#default"}).get("Item")
-        return _unpack(item["packed"]) if item else None
+        item = self.table.get_item(Key={"pk": f"ACCOUNT#{user_id}", "sk": "PROJECT#default"}, ConsistentRead=True).get("Item")
+        if not item:
+            return None
+        return {**_unpack(item["packed"]), "updated_at": item.get("updated_at", "")}
 
-    def put_project(self, user_id: str, project: dict[str, Any]) -> None:
-        self.table.put_item(Item={"pk": f"ACCOUNT#{user_id}", "sk": "PROJECT#default", "updated_at": _now(), "packed": _pack(project)})
+    def put_project(self, user_id: str, project: dict[str, Any]) -> str:
+        ver = _version()
+        token = project.get("mcp_token", "")
+        self.table.put_item(Item={"pk": f"ACCOUNT#{user_id}", "sk": "PROJECT#default", "updated_at": ver, "mcp_token": token, "packed": _pack(project)})
+        if token:   # direct lookup item so an external agent's MCP call can be routed by any API instance
+            self.table.put_item(Item={"pk": f"MCPTOKEN#{token}", "sk": "OWNER", "user_id": user_id, "updated_at": ver})
+        return ver
+
+    def forget_mcp_token(self, token: str) -> None:
+        try:
+            self.table.delete_item(Key={"pk": f"MCPTOKEN#{token}", "sk": "OWNER"})
+        except Exception as e:
+            print(f"[store] token not removed: {e}")
+
+    def project_version(self, user_id: str) -> str | None:
+        item = self.table.get_item(Key={"pk": f"ACCOUNT#{user_id}", "sk": "PROJECT#default"}, ProjectionExpression="updated_at", ConsistentRead=True).get("Item")
+        return item.get("updated_at") if item else None
+
+    def user_by_mcp_token(self, token: str) -> str | None:
+        item = self.table.get_item(Key={"pk": f"MCPTOKEN#{token}", "sk": "OWNER"}).get("Item")
+        return item.get("user_id") if item else None
 
     def put_run(self, user_id: str, record: dict[str, Any]) -> None:
         self.table.put_item(Item={
@@ -118,11 +159,18 @@ class DynamoStore:
     def list_runs(self, user_id: str) -> list[dict[str, Any]]:
         from boto3.dynamodb.conditions import Key
 
-        resp = self.table.query(KeyConditionExpression=Key("pk").eq(f"ACCOUNT#{user_id}") & Key("sk").begins_with("RUN#"),
-                                ProjectionExpression="run_id, #m, #mo, #ag, started_at, base_run_id, holdout, variant, summary", ExpressionAttributeNames={"#m": "mode", "#mo": "model", "#ag": "agent"})
-        rows = resp.get("Items", [])
+        kw: dict[str, Any] = dict(KeyConditionExpression=Key("pk").eq(f"ACCOUNT#{user_id}") & Key("sk").begins_with("RUN#"),
+                                  ProjectionExpression="run_id, #m, #mo, #ag, started_at, base_run_id, holdout, variant, summary",
+                                  ExpressionAttributeNames={"#m": "mode", "#mo": "model", "#ag": "agent"}, ScanIndexForward=False)
+        rows: list[dict[str, Any]] = []
+        while True:   # a query page is 1 MB of read data; the packed blobs count, so page through
+            resp = self.table.query(**kw)
+            rows += resp.get("Items", [])
+            if "LastEvaluatedKey" not in resp:
+                break
+            kw["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
         for r in rows:
-            r["summary"] = json.loads(json.dumps(r["summary"], default=float))
+            r["summary"] = json.loads(json.dumps(r["summary"], default=lambda d: int(d) if d % 1 == 0 else float(d)))
             r["base_run_id"] = r.get("base_run_id") or None
             r["holdout"] = bool(r.get("holdout"))
         return sorted(rows, key=lambda r: r["started_at"], reverse=True)

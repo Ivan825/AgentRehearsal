@@ -38,28 +38,91 @@ EXAMPLE_RUNS = BACKEND_DIR / "examples" / "runs"
 
 _projects: dict[str, dict[str, Any]] = {}   # user_id -> {"spec": AgentSpec, "scenarios": [Scenario]}
 _jobs: dict[str, dict[str, Any]] = {}
-_lock = threading.Lock()
+_lock = threading.RLock()   # re-entrant: _project() takes it and is called from inside locked sections
 
 
 _mcp_tokens: dict[str, str] = {}   # token -> user_id
 
 
+def _load_project(uid: str) -> dict[str, Any]:
+    saved = get_store().get_project(uid)
+    if saved:
+        return {"spec": AgentSpec.model_validate(saved["spec"]), "scenarios": [Scenario.model_validate(s) for s in saved["scenarios"]],
+                "mcp_token": saved.get("mcp_token") or secrets.token_urlsafe(24), "_version": saved.get("updated_at", "")}
+    return {"spec": AgentSpec.load(DEFAULT_SPEC), "scenarios": ScenarioSet.load(seeds_path()).scenarios, "mcp_token": secrets.token_urlsafe(24), "_version": ""}
+
+
 def _project(user: dict[str, Any]) -> dict[str, Any]:
+    """The user's workspace (spec + scenarios), kept in memory for speed but always checked against the store.
+
+    The store is the source of truth: if another API instance (a second ECS task, a rolling deployment) or a restart has
+    written a newer version, the cached copy is replaced. An in-progress job keeps its own reference to the dict it
+    started with and persists that dict, so its result is never lost to a reload.
+    """
     uid = user["id"]
-    if uid not in _projects:
-        saved = get_store().get_project(uid)
-        if saved:
-            _projects[uid] = {"spec": AgentSpec.model_validate(saved["spec"]), "scenarios": [Scenario.model_validate(s) for s in saved["scenarios"]], "mcp_token": saved.get("mcp_token") or secrets.token_urlsafe(24)}
-        else:
-            _projects[uid] = {"spec": AgentSpec.load(DEFAULT_SPEC), "scenarios": ScenarioSet.load(seeds_path()).scenarios, "mcp_token": secrets.token_urlsafe(24)}
-        _mcp_tokens[_projects[uid]["mcp_token"]] = uid
-    return _projects[uid]
+    with _lock:
+        cached = _projects.get(uid)
+        try:
+            ver = get_store().project_version(uid)
+        except Exception as e:
+            print(f"[store] version check failed: {e}")
+            ver = cached["_version"] if cached else None
+        if cached is None or (ver is not None and ver != cached.get("_version")):
+            cached = _load_project(uid)
+            _projects[uid] = cached
+        _mcp_tokens[cached["mcp_token"]] = uid
+        return cached
 
 
-def _persist(user: dict[str, Any], strict: bool = False) -> None:
-    p = _project(user)
+def _spec_from_run(run: dict[str, Any], proj: dict[str, Any]) -> AgentSpec:
+    """The agent as it was when a run was recorded. Older stored runs (the shipped examples) predate session facts,
+    while their policy refers to them, so fill those in from the current workspace."""
+    spec = AgentSpec.model_validate(run["spec"])
+    if not spec.session and proj["spec"].session and proj["spec"].name == spec.name:
+        spec = spec.model_copy(update={"session": proj["spec"].session, "session_header": proj["spec"].session_header})
+    return spec
+
+
+def _assign_ids(user: dict[str, Any], new: list[Scenario], prefix: str) -> list[Scenario]:
+    """Give new scenarios ids that collide with nothing in the workspace as it is now."""
+    with _lock:
+        taken = {s.id for s in _project(user)["scenarios"]}
+    n = 0
+    for s in new:
+        n += 1
+        while f"{prefix}{n:02d}" in taken:
+            n += 1
+        s.id = f"{prefix}{n:02d}"
+        taken.add(s.id)
+    return new
+
+
+def _add_scenarios(user: dict[str, Any], new: list[Scenario], prefix: str, replace_all: bool = False, assign_ids: bool = True) -> list[Scenario]:
+    """Append scenarios to the user's workspace as it is NOW (not as a job saw it when it started) and persist.
+    Edits the user made while the job ran are kept. Returns the scenarios with their final ids."""
+    with _lock:
+        cur = _project(user)
+        if replace_all:
+            cur["scenarios"] = []
+        if assign_ids:
+            _assign_ids(user, new, prefix)
+        present = {s.id for s in cur["scenarios"]}
+        cur["scenarios"] = list(cur["scenarios"]) + [s for s in new if s.id not in present]
+        _persist(user, cur)
+    return list(new)
+
+
+def _persist(user: dict[str, Any], p: dict[str, Any] | None = None, strict: bool = False) -> None:
+    """Write the workspace to the store. Pass `p` from a job so the dict it mutated is what gets saved."""
+    uid = user["id"]
+    if p is None:
+        p = _projects.get(uid) or _project(user)
     try:
-        get_store().put_project(user["id"], {"spec": p["spec"].model_dump(), "scenarios": [s.model_dump() for s in p["scenarios"]], "mcp_token": p["mcp_token"]})
+        ver = get_store().put_project(uid, {"spec": p["spec"].model_dump(), "scenarios": [s.model_dump() for s in p["scenarios"]], "mcp_token": p["mcp_token"]})
+        p["_version"] = ver
+        with _lock:
+            _projects[uid] = p
+            _mcp_tokens[p["mcp_token"]] = uid
     except Exception as e:  # persistence is best effort, but an edit the user made must not vanish silently
         print(f"[store] project not saved: {e}")
         if strict:
@@ -119,10 +182,15 @@ def workspace_mcp(request: Request, user: dict[str, Any] = auth.User) -> dict[st
 @app.post("/api/workspace/mcp/rotate")
 def workspace_mcp_rotate(request: Request, user: dict[str, Any] = auth.User) -> dict[str, Any]:
     p = _project(user)
-    _mcp_tokens.pop(p["mcp_token"], None)
+    old = p["mcp_token"]
+    _mcp_tokens.pop(old, None)
     p["mcp_token"] = secrets.token_urlsafe(24)
     _mcp_tokens[p["mcp_token"]] = user["id"]
-    _persist(user)
+    _persist(user, strict=True)
+    try:
+        get_store().forget_mcp_token(old)
+    except Exception as e:
+        print(f"[store] old token not removed: {e}")
     return workspace_mcp(request, user)
 
 
@@ -131,9 +199,17 @@ async def mcp_endpoint(token: str, request: Request):
     """MCP (streamable HTTP, JSON responses) serving the workspace's simulated tools to an external agent."""
     uid = _mcp_tokens.get(token)
     if uid is None:
-        # Tokens are registered when a workspace is loaded; after an API restart the owner must open the workspace once.
-        raise HTTPException(404, "unknown MCP token; open the workspace (Define tab) once, then retry")
-    spec: AgentSpec = _projects[uid]["spec"]
+        try:
+            uid = get_store().user_by_mcp_token(token)
+        except Exception as e:
+            print(f"[store] token lookup failed: {e}")
+    if uid is None:
+        raise HTTPException(404, "unknown MCP token; copy the current URL from the Define tab (it may have been rotated)")
+    proj = _project({"id": uid})
+    if proj["mcp_token"] != token:   # rotated on another instance
+        _mcp_tokens.pop(token, None)
+        raise HTTPException(404, "this MCP URL was rotated; copy the current one from the Define tab")
+    spec: AgentSpec = proj["spec"]
     try:
         body = await request.json()
     except Exception:
@@ -297,7 +373,7 @@ def draft_world_endpoint(body: DraftIn, user: dict[str, Any] = auth.User) -> dic
                     proj["scenarios"] = []
                 job.update(status="done", phase="done")
             if body.apply:
-                _persist(user)
+                _persist(user, proj)
         except Exception as e:
             job["status"] = "error"
             job["error"] = f"drafting failed: {type(e).__name__}: {e}"
@@ -372,21 +448,11 @@ def generate_endpoint(body: GenerateIn, user: dict[str, Any] = auth.User) -> dic
     def work() -> None:
         try:
             ss = generate_scenarios(p["spec"], per_constraint=body.per_constraint, max_rules=body.max_rules)
+            # append keeps everything already there (seed, hand-added, held-out, escalated, edits made while authoring)
+            _add_scenarios(user, ss.scenarios, "G", replace_all=not body.append)
             with _lock:
-                # append keeps everything already there (seed, hand-added, held-out, escalated); new ids never collide
-                kept = list(p["scenarios"]) if body.append else []
-                taken = {s.id for s in kept}
-                n = 0
-                for s in ss.scenarios:
-                    n += 1
-                    while f"G{n:02d}" in taken:
-                        n += 1
-                    s.id = f"G{n:02d}"
-                    taken.add(s.id)
-                p["scenarios"] = kept + ss.scenarios
-                job["result"] = {"generated": len(ss.scenarios), "total": len(p["scenarios"])}
+                job["result"] = {"generated": len(ss.scenarios), "total": len(_project(user)["scenarios"])}
                 job["status"] = "done"
-            _persist(user)
         except Exception as e:
             job["status"] = "error"
             job["error"] = f"scenario generation failed: {type(e).__name__}: {e}" + ("  → the author model is retired on Bedrock; set AGENTREHEARSAL_AUTHOR_MODEL in backend/.env to an active one (e.g. global.anthropic.claude-opus-4-6-v1) and restart the API." if "Legacy" in str(e) else "")
@@ -397,9 +463,12 @@ def generate_endpoint(body: GenerateIn, user: dict[str, Any] = auth.User) -> dic
 
 def _new_job(user: dict[str, Any], **fields: Any) -> dict[str, Any]:
     with _lock:
-        job_id = f"job_{len(_jobs) + 1:04d}"
-        job: dict[str, Any] = {"job_id": job_id, "owner": user["id"], "status": "running", "progress": [], "plan": [], "total_attempts": 0, "run_id": None, "result": None, "error": None, **fields}
+        job_id = f"job_{secrets.token_hex(6)}"   # unique across API instances and restarts
+        job: dict[str, Any] = {"job_id": job_id, "owner": user["id"], "status": "running", "progress": [], "plan": [], "total_attempts": 0, "run_id": None, "result": None, "error": None, "round": 0, "phase": "", **fields}
         _jobs[job_id] = job
+        if len(_jobs) > 300:   # keep memory bounded: drop the oldest finished jobs
+            for old in [k for k, v in list(_jobs.items()) if v["status"] != "running"][: len(_jobs) - 300]:
+                _jobs.pop(old, None)
     return job
 
 
@@ -455,14 +524,10 @@ def author_holdout(body: HoldoutIn, user: dict[str, Any] = auth.User) -> dict[st
         try:
             existing = list(p["scenarios"])
             avoid = list(dict.fromkeys([s.title for s in existing] + [s.prompt for s in existing]))
-            start = len([s for s in existing if s.source == "holdout"]) + 1
             ss = generate_scenarios(p["spec"], per_constraint=body.per_constraint, avoid=avoid, source="holdout")
-            for i, sc in enumerate(ss.scenarios):
-                sc.id = f"H{start + i:02d}"
+            added = _add_scenarios(user, ss.scenarios, "H")
             with _lock:
-                p["scenarios"] = existing + ss.scenarios
-                job.update(result={"generated": len(ss.scenarios), "ids": [sc.id for sc in ss.scenarios]}, status="done", phase="done")
-            _persist(user)
+                job.update(result={"generated": len(added), "ids": [sc.id for sc in added]}, status="done", phase="done")
         except Exception as e:
             job["status"] = "error"
             job["error"] = f"held-out authoring failed: {type(e).__name__}: {e}"
@@ -488,7 +553,7 @@ def start_escalate(body: EscalateIn, user: dict[str, Any] = auth.User) -> dict[s
 
     proj = _project(user)
     base = _load_run_for(user, body.base_run_id)
-    spec = AgentSpec.model_validate(base["spec"])
+    spec = _spec_from_run(base, _project(user))
     policy = CedarPolicy(base["policy_cedar"], spec)
     spec, model, external_target = _prepare_target(proj, spec, body.model, body.model_id)
     resisted = [s for s in scenarios_from_run(base) if s.category in ATTACK_CATEGORIES]
@@ -506,7 +571,7 @@ def start_escalate(body: EscalateIn, user: dict[str, Any] = auth.User) -> dict[s
                 raise RuntimeError("the agent resisted no attacks in that run; nothing to escalate")
             rounds: list[dict[str, Any]] = []
             current = resisted
-            start = len([s for s in proj["scenarios"] if s.source == "escalated"]) + 1
+            start = 1
             found_total = 0
             for rnd in range(1, max(1, body.rounds) + 1):
                 with _lock:
@@ -514,18 +579,16 @@ def start_escalate(body: EscalateIn, user: dict[str, Any] = auth.User) -> dict[s
                 ss = escalate(spec, current, prefix="E", start=start)
                 if not ss.scenarios:
                     break
-                start += len(ss.scenarios)
+                _assign_ids(user, ss.scenarios, "E")   # unique against the workspace as it is now
                 plan = [{"id": sc.id, "title": sc.title, "category": sc.category, "attempts": max(sc.runs, body.attack_runs)} for sc in ss.scenarios]
                 with _lock:
                     job.update(plan=plan, total_attempts=sum(x["attempts"] for x in plan), phase="rehearse")
                 rec = run_scenarios(spec, ss.scenarios, model, "rehearse", policy, attack_runs=body.attack_runs, workers=1, on_progress=progress)
                 rec.update(owner=user["id"], base_run_id=body.base_run_id, variant=f"escalate_round_{rnd}")
-                save_run(rec, user_id=user["id"])
+                save_run(rec, user_id=user["id"], strict=True)
                 found = [s for s in rec["scenarios"] if s["verdict"] != "PASS"]
                 found_total += len(found)
-                with _lock:
-                    proj["scenarios"] = list(proj["scenarios"]) + ss.scenarios
-                _persist(user)
+                _add_scenarios(user, ss.scenarios, "E", assign_ids=False)
                 rounds.append({"round": rnd, "run_id": rec["run_id"], "tried": len(ss.scenarios), "found": len(found), "found_ids": [s["id"] for s in found]})
                 current = [s for s in ss.scenarios if s.id not in {f["id"] for f in found}]
                 if not current:
@@ -643,7 +706,7 @@ def live_finish(body: LiveFinishIn, user: dict[str, Any] = auth.User) -> dict[st
     rec.update(owner=user["id"], live=True)
     if body.base_run_id:
         rec["base_run_id"] = body.base_run_id
-    save_run(rec, user_id=user["id"])
+    save_run(rec, user_id=user["id"], strict=True)
     _live[user["id"]] = {"mode": st["mode"], "cedar": st["cedar"], "attempts": {}, "current": None}
     return {"run_id": rec["run_id"], "summary": rec["summary"]}
 
@@ -711,7 +774,7 @@ def start_run(body: RunIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
         raise HTTPException(400, "This agent connects to the MCP URL itself, so AgentRehearsal cannot send it prompts. Use Live rehearsal on the Rehearse tab: start a scenario, paste its prompt into the agent, stop, repeat.")
     if body.base_run_id:
         base = _load_run_for(user, body.base_run_id)
-        spec = AgentSpec.model_validate(base["spec"])
+        spec = _spec_from_run(base, _project(user))
         scenarios = scenarios_from_run(base)
         cedar = body.cedar or base["policy_cedar"]
     else:
@@ -734,11 +797,12 @@ def start_run(body: RunIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
 
     def work() -> None:
         try:
-            rec = run_scenarios(spec, scenarios, model, body.mode, policy, attack_runs=body.attack_runs, workers=body.workers, on_progress=progress)
+            # an external target records calls through one slot per workspace token, so it must run one attempt at a time
+            rec = run_scenarios(spec, scenarios, model, body.mode, policy, attack_runs=body.attack_runs, workers=1 if spec.target.kind != "simulated" else body.workers, on_progress=progress)
             if body.base_run_id:
                 rec["base_run_id"] = body.base_run_id
             rec["owner"] = user["id"]
-            save_run(rec, user_id=user["id"])
+            save_run(rec, user_id=user["id"], strict=True)
             job["run_id"] = rec["run_id"]
             job["status"] = "done"
         except Exception as e:
@@ -766,7 +830,7 @@ def start_validation(body: ValidateIn, user: dict[str, Any] = auth.User) -> dict
 
     proj = _project(user)
     base = _load_run_for(user, body.base_run_id)
-    spec = AgentSpec.model_validate(base["spec"])
+    spec = _spec_from_run(base, _project(user))
     cedar = base["policy_cedar"]
     problems = validate_cedar(cedar)
     if problems:
@@ -791,12 +855,12 @@ def start_validation(body: ValidateIn, user: dict[str, Any] = auth.User) -> dict
                 job.update(plan=plan, total_attempts=sum(x["attempts"] for x in plan), phase="rehearse", mode="rehearse", progress=[])
             before = run_scenarios(spec, ss.scenarios, model, "rehearse", policy, attack_runs=body.attack_runs, workers=1, on_progress=progress)
             before.update(owner=user["id"], holdout=True, base_run_id=body.base_run_id)
-            save_run(before, user_id=user["id"])
+            save_run(before, user_id=user["id"], strict=True)
             with _lock:
                 job.update(phase="enforce", mode="enforce", progress=[])
             after = run_scenarios(spec, ss.scenarios, model, "enforce", policy, attack_runs=body.attack_runs, workers=1, on_progress=progress)
             after.update(owner=user["id"], holdout=True, base_run_id=before["run_id"], validates_run_id=body.base_run_id)
-            save_run(after, user_id=user["id"])
+            save_run(after, user_id=user["id"], strict=True)
             with _lock:
                 job.update(run_id=after["run_id"], result={"before_run": before["run_id"], "after_run": after["run_id"], "generated": len(ss.scenarios)}, status="done", phase="done")
         except Exception as e:
@@ -824,7 +888,7 @@ def start_harden(body: HardenIn, user: dict[str, Any] = auth.User) -> dict[str, 
 
     proj = _project(user)
     base = _load_run_for(user, body.base_run_id)
-    spec = AgentSpec.model_validate(base["spec"])
+    spec = _spec_from_run(base, _project(user))
     scenarios = scenarios_from_run(base)
     policy = CedarPolicy(base["policy_cedar"], spec)
     spec, model, external_target = _prepare_target(proj, spec, body.model, body.model_id)
@@ -843,7 +907,7 @@ def start_harden(body: HardenIn, user: dict[str, Any] = auth.User) -> dict[str, 
                 job.update(plan=plan, total_attempts=sum(x["attempts"] for x in plan), phase="rehearse", progress=[], result={"system_prompt": hp.system_prompt, "changes": hp.changes, "run_id": None})
             rec = run_scenarios(hardened_spec, scenarios, model, "rehearse", policy, attack_runs=body.attack_runs, workers=1, on_progress=progress)
             rec.update(owner=user["id"], base_run_id=body.base_run_id, variant="hardened_prompt", prompt_changes=hp.changes)
-            save_run(rec, user_id=user["id"])
+            save_run(rec, user_id=user["id"], strict=True)
             with _lock:
                 job["result"]["run_id"] = rec["run_id"]
                 job.update(run_id=rec["run_id"], status="done", phase="done")
@@ -901,11 +965,19 @@ def run_fixpack(run_id: str, after: str | None = None, hardened: str | None = No
     return PlainTextResponse(md, media_type="text/markdown", headers={"Content-Disposition": f'attachment; filename="{spec.name}-fixpack.md"'})
 
 
+@app.get("/api/jobs")
+def list_jobs(user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """The user's jobs still running on this instance, newest first: a reloaded page reattaches to them."""
+    with _lock:
+        mine = [_public_job(j) for j in _jobs.values() if j["owner"] == user["id"] and j["status"] == "running"]
+    return {"jobs": list(reversed(mine))}
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str, user: dict[str, Any] = auth.User) -> dict[str, Any]:
     job = _jobs.get(job_id)
     if not job or job["owner"] != user["id"]:
-        raise HTTPException(404, "no such job")
+        raise HTTPException(404, "job not found: the API restarted (or a different instance answered) while it was running. Start it again.")
     with _lock:
         return _public_job(job)
 

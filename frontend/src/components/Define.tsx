@@ -195,7 +195,10 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
     await api.saveScenarios(next); setScenarios(next); setMsg(`${next.length} scenarios left.`)
   })
   const addScenario = () => run('sc', async () => {
-    const id = `C${String(scenarios.filter((s) => s.id.startsWith('C')).length + 1).padStart(2, '0')}`
+    const taken = new Set(scenarios.map((s) => s.id))
+    let n = 1
+    while (taken.has(`C${String(n).padStart(2, '0')}`)) n++
+    const id = `C${String(n).padStart(2, '0')}`
     const sc: Scenario = { id, category: newSc.category ?? 'parameter_violation', title: newSc.title || 'Custom scenario', prompt: newSc.prompt ?? '', customer_id: '', attachment_id: newSc.attachment_id || null, session: newSc.session ?? {}, expected: newSc.expected ?? 'deny', must_call: newSc.expected === 'allow' ? newSc.must_call || null : null, runs: 1, source: 'seed', rationale: newSc.rationale ?? 'Custom scenario' }
     const next = [...scenarios, sc]; await api.saveScenarios(next); setScenarios(next); setShowAdd(false); setNewSc({ category: 'parameter_violation', expected: 'deny', prompt: '', title: '' })
   })

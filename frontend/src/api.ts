@@ -64,6 +64,7 @@ export const api = {
   startRun: (body: { mode: 'rehearse' | 'enforce'; model: 'bedrock' | 'scripted'; model_id?: string | null; attack_runs?: number; workers?: number; base_run_id?: string; cedar?: string }) =>
     j<Job>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
   job: (id: string) => j<Job>(`/api/jobs/${id}`),
+  runningJobs: () => j<{ jobs: Job[] }>('/api/jobs'),
   models: () => j<{ models: { id: string; label: string; note?: string; provider?: string; available?: boolean }[]; default: string; live: boolean; providers?: { id: string; label: string; available: boolean; env: string | null }[] }>('/api/models'),
   workspaceMcp: () => j<{ token: string; url: string; tools: string[]; upstream?: string; forwarding?: boolean; mcp_json?: unknown }>('/api/workspace/mcp'),
   liveStart: (scenario_id: string, mode: 'rehearse' | 'enforce', cedar?: string) => j<{ scenario_id: string; prompt: string; mode: string }>('/api/live/start', { method: 'POST', body: JSON.stringify({ scenario_id, mode, cedar }) }),
@@ -87,8 +88,14 @@ export const api = {
 
 /** Poll a background job until it finishes; throws with the job's error on failure. */
 export async function waitJob(jobId: string, intervalMs = 1500): Promise<Job> {
+  let misses = 0
   for (;;) {
-    const cur = await api.job(jobId)
+    let cur: Job
+    try { cur = await api.job(jobId); misses = 0 } catch (e) {
+      // a dropped fetch or proxy hiccup is not the end of the job; only give up when the job is really gone
+      if (/job not found|no such job/i.test(String(e)) || ++misses >= 6) throw e
+      await new Promise(r => setTimeout(r, intervalMs)); continue
+    }
     if (cur.status === 'done') return cur
     if (cur.status === 'error') throw new Error(cur.error ?? 'job failed')
     await new Promise(r => setTimeout(r, intervalMs))

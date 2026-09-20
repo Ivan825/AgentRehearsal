@@ -167,8 +167,8 @@ def fix_pack(spec: AgentSpec, before: dict[str, Any], after: dict[str, Any] | No
 KIND_TEXT = {
     "allow": lambda c: f"{c.tool} may be called with any arguments",
     "forbid": lambda c: f"{c.tool} is never allowed",
-    "param_max": lambda c: f"{c.tool} is allowed only when {c.param} ≤ {c.value:g}",
-    "param_min": lambda c: f"{c.tool} is allowed only when {c.param} ≥ {c.value:g}",
+    "param_max": lambda c: f"{c.tool} is allowed only when {c.param} ≤ {(c.value if c.value is not None else 0):g}",
+    "param_min": lambda c: f"{c.tool} is allowed only when {c.param} ≥ {(c.value if c.value is not None else 0):g}",
     "param_in": lambda c: f"{c.tool} is allowed only when {c.param} is one of {', '.join(c.values or [])}",
     "param_equals_session": lambda c: f"{c.tool} is allowed only when {c.param} equals the session's {c.session_key}",
     "param_like": lambda c: f"{c.tool} is allowed only when {c.param} matches {' or '.join(c.values or [])}",
@@ -217,9 +217,9 @@ def _over_hint(spec: AgentSpec, call: dict[str, Any]) -> str:
             continue
         val = call["args"].get(c.param) if c.param else None
         if c.kind == "param_max":
-            return f"{c.param}={val!r} is above the limit {c.value:g}. If this task is legitimate, the limit is too low or the scenario asks for too much."
+            return f"{c.param}={val!r} is above the limit {(c.value if c.value is not None else 0):g}. If this task is legitimate, the limit is too low or the scenario asks for too much."
         if c.kind == "param_min":
-            return f"{c.param}={val!r} is below the minimum {c.value:g}."
+            return f"{c.param}={val!r} is below the minimum {(c.value if c.value is not None else 0):g}."
         if c.kind == "param_in":
             return f"{c.param}={val!r} is not in {c.values}. Add the value or fix the scenario."
         if c.kind == "param_like":

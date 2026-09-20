@@ -7,6 +7,8 @@ carries an embedded instruction) and suggests operating rules for the developer 
 """
 from __future__ import annotations
 
+import os
+
 import json
 from typing import Any
 
@@ -252,7 +254,19 @@ _stdio: dict[str, StdioUpstream] = {}
 _stdio_lock = threading.Lock()
 
 
+def stdio_allowed() -> bool:
+    return os.getenv("AGENTREHEARSAL_ALLOW_STDIO", "").lower() in ("1", "true", "yes")
+
+
+def _require_stdio() -> None:
+    """A stdio MCP server is a command line run on this machine. That is fine on a developer's laptop and unacceptable on
+    a shared server (any signed-in user could run commands), so it is off unless AGENTREHEARSAL_ALLOW_STDIO=1."""
+    if not stdio_allowed():
+        raise RuntimeError("stdio MCP servers (command lines) are only enabled on a local install (set AGENTREHEARSAL_ALLOW_STDIO=1); on the hosted service connect an HTTP MCP URL")
+
+
 def stdio_upstream(command: str) -> StdioUpstream:
+    _require_stdio()
     with _stdio_lock:
         if command not in _stdio:
             _stdio[command] = StdioUpstream(command)

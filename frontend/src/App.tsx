@@ -39,7 +39,7 @@ export default function App() {
   const [liveScenarios, setLiveScenarios] = useState<Scenario[]>([])
   const [escalated, setEscalated] = useState<{ rounds: { round: number; run_id: string; tried: number; found: number }[]; found: number; added: number } | null>(null)
   const [job, setJob] = useState<Job | null>(null)
-  const [selected, setSelected] = useState<ScenarioResult | null>(null)
+  const [selected, setSelected] = useState<{ s: ScenarioResult; run: Run } | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const poll = useRef<number | null>(null)
   const { theme, toggle } = useTheme()
@@ -47,6 +47,7 @@ export default function App() {
   const user = session.user
 
   const refreshRuns = useCallback(() => api.runs().then((r) => setRuns(r.runs)).catch(() => {}), [])
+  useEffect(() => () => { if (poll.current) window.clearInterval(poll.current) }, [])
 
   useEffect(() => {
     api.spec().then(setSpec).catch((e) => setErr(String(e)))
@@ -54,34 +55,75 @@ export default function App() {
     api.models().then((m) => setModelId((cur) => cur || m.default)).catch(() => {})
     api.scenarios().then((r) => setLiveScenarios(r.scenarios)).catch(() => {})
     refreshRuns()
+    // a reloaded page reattaches to whatever is still running server-side instead of looking cancelled
+    api.runningJobs().then(({ jobs }) => { if (jobs[0]) resume(jobs[0]) }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshRuns])
+
+  function resume(j: Job) {
+    const finishRun = async (r: Run) => {
+      if (r.holdout) return
+      if (r.mode === 'rehearse') { setBefore(r); setCedar(r.policy_cedar) }
+      else { setAfter(r); setCedar(r.policy_cedar); if (r.base_run_id) { const b = await api.run(r.base_run_id); setBefore(b); setCmp(await api.compare(b.run_id, r.run_id)) } }
+    }
+    switch (j.kind) {
+      case 'run':
+        setStage(j.mode === 'enforce' ? 'replay' : 'rehearse')
+        watch(j, finishRun)
+        break
+      case 'validate':
+        setStage('replay')
+        watch(j, async (_r, done) => { const res = done.result as { before_run: string; after_run: string } | undefined; if (res) setHoldout(await api.compare(res.before_run, res.after_run)) })
+        break
+      case 'harden':
+        setStage('protect')
+        watch(j, async (r, done) => { const res = done.result as { system_prompt: string; changes: string[] } | undefined; if (res) setHardened({ system_prompt: res.system_prompt, changes: res.changes, run: r }) })
+        break
+      case 'escalate':
+        setStage('rehearse')
+        watch(j, async (_r, done) => { const res = done.result as { rounds: { round: number; run_id: string; tried: number; found: number }[]; found: number; added: number } | undefined; if (res) setEscalated(res) })
+        break
+      default:
+        watch(j, async () => { api.scenarios().then((r) => setLiveScenarios(r.scenarios)).catch(() => {}) })   // authoring: Define refreshes its own list on focus
+    }
+  }
 
   const chosenModel = () => (model === 'bedrock' ? (spec?.model_id || modelId || null) : null)
 
   function watch(j: Job, onDone: (run: Run, job: Job) => void | Promise<void>) {
     setJob(j)
     if (poll.current) window.clearInterval(poll.current)
+    let misses = 0
     poll.current = window.setInterval(async () => {
       let cur: Job
-      try { cur = await api.job(j.job_id) } catch {
+      try { cur = await api.job(j.job_id); misses = 0 } catch (e) {
+        const gone = /job not found|no such job/i.test(String(e))
+        if (!gone && ++misses < 6) return   // a dropped fetch or a proxy hiccup: keep polling
         window.clearInterval(poll.current!); poll.current = null
-        setJob(null); setErr('The API restarted while this run was in progress, so the run was lost. Start it again.')
+        setJob(null)
+        setErr(gone ? 'The API restarted while this run was in progress, so the run was lost. Start it again.' : `Lost contact with the API while polling: ${String(e)}. Reload the page to see whether the run finished.`)
+        refreshRuns()
         return
       }
       setJob(cur)
       if (cur.status !== 'running') {
         window.clearInterval(poll.current!)
         poll.current = null
-        if (cur.status === 'done' && cur.run_id) { await onDone(await api.run(cur.run_id), cur); refreshRuns() }
+        try {
+          if (cur.status === 'done' && cur.run_id) await onDone(await api.run(cur.run_id), cur)
+          else if (cur.status === 'done' && cur.kind === 'escalate') setErr('Bedrock could not write any harder variants for this run, so there is nothing new to try.')
+        } catch (e) { setErr(String(e)) }
+        refreshRuns()
         if (cur.status === 'error') setErr(cur.error)
       }
     }, 700)
   }
 
   async function rehearse() {
-    setErr(null); setAfter(null); setCmp(null); setHoldout(null); setHardened(null); setEscalated(null); setSelected(null)
+    setErr(null)
     try {
       const j = await api.startRun({ mode: 'rehearse', model, model_id: chosenModel(), attack_runs: 3, workers: 1 })
+      setAfter(null); setCmp(null); setHoldout(null); setHardened(null); setEscalated(null); setSelected(null)
       setStage('rehearse')
       watch(j, (r) => setBefore(r))
     } catch (e) { setErr(String(e)) }
@@ -150,14 +192,25 @@ export default function App() {
   }
 
   async function loadRun(id: string) {
+    setErr(null)
+    try { await loadRunInner(id) } catch (e) { setErr(`Could not open ${id}: ${String(e)}`) }
+  }
+
+  async function loadRunInner(id: string) {
     const r = await api.run(id)
-    setSelected(null); setErr(null)
+    setSelected(null)
     if (r.holdout) {
       // a held-out validation run: show it under the enforce run it validates
-      const enforceHold = r.mode === 'enforce' ? r : null
-      const holdBefore = r.mode === 'enforce' && r.base_run_id ? await api.run(r.base_run_id) : r
-      if (enforceHold) setHoldout(await api.compare(holdBefore.run_id, enforceHold.run_id))
-      const validated = enforceHold?.validates_run_id ? await api.run(enforceHold.validates_run_id) : null
+      let enforceHold = r.mode === 'enforce' ? r : null
+      if (!enforceHold) {
+        // the log-only half was clicked: find its enforce twin in the stored runs
+        const twin = runs.find((x) => x.holdout && x.mode === 'enforce' && x.base_run_id === r.run_id)
+        if (!twin) throw new Error('this is the log-only half of a held-out validation; open its enforced run instead')
+        enforceHold = await api.run(twin.run_id)
+      }
+      const holdBefore = enforceHold.base_run_id ? await api.run(enforceHold.base_run_id) : r
+      setHoldout(await api.compare(holdBefore.run_id, enforceHold.run_id))
+      const validated = enforceHold.validates_run_id ? await api.run(enforceHold.validates_run_id) : null
       if (validated) {
         setAfter(validated); setCedar(validated.policy_cedar)
         if (validated.base_run_id) { const b = await api.run(validated.base_run_id); setBefore(b); setCmp(await api.compare(b.run_id, validated.run_id)) }
@@ -171,7 +224,6 @@ export default function App() {
   }
 
   const running = job?.status === 'running'
-  const shownRun = stage === 'replay' && after ? after : before
   const hasConstraints = (spec?.constraints.length ?? 0) > 0
   const done: Record<Stage, boolean> = { define: hasConstraints, rehearse: !!before, diagnose: !!before, protect: !!after || !!hardened, replay: !!holdout }
 
@@ -243,12 +295,12 @@ export default function App() {
           </div>
         )}
         {stage === 'rehearse' && spec?.target?.kind === 'mcp_client' && !running && <Live scenarios={liveScenarios} cedar={cedar} before={before} onRun={loadRun} onScenarios={() => api.scenarios().then((r) => setLiveScenarios(r.scenarios)).catch(() => {})} />}
-        {stage === 'rehearse' && spec?.target?.kind === 'mcp_client' && !running && before && <Scorecard run={before} onOpen={(s) => { setSelected(s); setStage('diagnose') }} />}
-        {stage === 'rehearse' && spec?.target?.kind !== 'mcp_client' && (before ? <Scorecard run={before} onOpen={(s) => { setSelected(s); setStage('diagnose') }} onEscalate={escalate} busy={running} /> : !running && (
+        {stage === 'rehearse' && spec?.target?.kind === 'mcp_client' && !running && before && <Scorecard run={before} onOpen={(s) => { setSelected({ s, run: before }); setStage('diagnose') }} />}
+        {stage === 'rehearse' && spec?.target?.kind !== 'mcp_client' && (before ? <Scorecard run={before} onOpen={(s) => { setSelected({ s, run: before }); setStage('diagnose') }} onEscalate={escalate} busy={running} /> : !running && (
           <Landing agent={spec?.name ?? 'the agent'} onRun={rehearse} runs={runs} onLoad={loadRun} />
         ))}
 
-        {stage === 'diagnose' && (selected && shownRun ? <Trace scenario={selected} spec={shownRun.spec} mode={shownRun.mode} onBack={() => setStage(shownRun.mode === 'enforce' ? 'replay' : 'rehearse')} /> : (
+        {stage === 'diagnose' && (selected ? <Trace scenario={selected.s} spec={selected.run.spec} mode={selected.run.mode} onBack={() => setStage(selected.run.mode === 'enforce' ? 'replay' : 'rehearse')} /> : (
           <Card title="Diagnose"><p className="text-sm text-muted">Pick a scenario from a scorecard to see its full reasoning path: the prompt, every tool call with its arguments, the policy decision and the rule behind it.</p></Card>
         ))}
 
@@ -257,7 +309,7 @@ export default function App() {
         {stage === 'replay' && (after ? (
           <div className="space-y-4">
             <Replay cmp={cmp} holdout={holdout} onValidate={validate} busy={running} />
-            <Scorecard run={after} onOpen={(s) => { setSelected(s); setStage('diagnose') }} />
+            <Scorecard run={after} onOpen={(s) => { setSelected({ s, run: after }); setStage('diagnose') }} />
           </div>
         ) : !running && <Replay cmp={null} holdout={null} onValidate={validate} busy={running} />)}
 

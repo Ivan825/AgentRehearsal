@@ -191,7 +191,10 @@ class CedarPolicy:
         with _CEDAR_LOCK:
             result = cedarpy.is_authorized(request, self._policy_set, [])
         allowed = result.decision == cedarpy.Decision.Allow
-        d = Decision(allowed=allowed, reasons=[self._names.get(r, r) for r in result.diagnostics.reasons], errors=[str(e) for e in result.diagnostics.errors])
+        errors = [str(e) for e in result.diagnostics.errors]
+        if result.decision not in (cedarpy.Decision.Allow, cedarpy.Decision.Deny):
+            errors.insert(0, "policy could not evaluate this call (an argument has a type the policy cannot judge); denied to be safe")
+        d = Decision(allowed=allowed, reasons=[self._names.get(r, r) for r in result.diagnostics.reasons], errors=errors)
         if not allowed and self.spec:
             d.violated = self._explain_violation(tool, args, session or {})
         return d
@@ -234,13 +237,23 @@ def _num(v: Any) -> float | None:
 
 
 def _coerce(d: dict[str, Any]) -> dict[str, Any]:
-    """Cedar has no float type; whole-number floats become ints. Nested values are kept as-is."""
+    """Make a call's arguments evaluable by Cedar: it has no null and no float.
+
+    None is dropped (an absent optional argument), whole-number floats become ints, and other floats are rounded to the
+    nearest integer so a limit rule can still judge them (12.5 -> 13; a boundary this fine is reported by the trace).
+    """
     out: dict[str, Any] = {}
     for k, v in d.items():
-        if isinstance(v, float) and v.is_integer():
-            out[k] = int(v)
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            out[k] = v
+        elif isinstance(v, float):
+            out[k] = int(v) if v.is_integer() else int(round(v))
         elif isinstance(v, dict):
             out[k] = _coerce(v)
+        elif isinstance(v, list):
+            out[k] = [_coerce(x) if isinstance(x, dict) else (int(round(x)) if isinstance(x, float) else x) for x in v if x is not None]
         else:
             out[k] = v
     return out
