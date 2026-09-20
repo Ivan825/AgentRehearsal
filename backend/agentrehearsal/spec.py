@@ -17,6 +17,8 @@ ConstraintKind = Literal[
     "param_min",             # numeric param >= value
     "param_in",              # param must be one of `values`
     "param_equals_session",  # param must equal a session value (e.g. the verified customer email)
+    "param_like",            # string param must match one of `values` (Cedar `like`; `*` is the wildcard). Paths are normalised first.
+    "param_not_like",        # string param must match none of `values` (deny list of patterns). Paths are normalised first.
 ]
 
 
@@ -90,6 +92,7 @@ class TargetConfig(BaseModel):
     # workspace's MCP URL itself; one line in its mcp.json. AgentRehearsal sits between the agent and its real
     # MCP server: every call is recorded and judged; log-only forwards, enforce refuses. No adapter, no fork.
     upstream_url: str = ""         # the real MCP server behind the proxy (schema read from it; calls forwarded only when forward_calls)
+    upstream_command: str = ""     # or a stdio server we launch ourselves, e.g. "npx -y @modelcontextprotocol/server-filesystem /path/to/workspace"
     upstream_auth: str = ""        # Authorization header for the upstream
     forward_calls: bool = False    # False = answer with the simulated responses even in proxy mode (safe default)
 

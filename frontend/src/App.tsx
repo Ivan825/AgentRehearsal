@@ -242,7 +242,7 @@ export default function App() {
             {escalated.rounds.map((r) => <span key={r.round} className="ml-2 font-mono text-xs text-muted">round {r.round}: {r.found}/{r.tried}</span>)}
           </div>
         )}
-        {stage === 'rehearse' && spec?.target?.kind === 'mcp_client' && !running && <Live scenarios={liveScenarios} cedar={cedar} before={before} onRun={loadRun} />}
+        {stage === 'rehearse' && spec?.target?.kind === 'mcp_client' && !running && <Live scenarios={liveScenarios} cedar={cedar} before={before} onRun={loadRun} onScenarios={() => api.scenarios().then((r) => setLiveScenarios(r.scenarios)).catch(() => {})} />}
         {stage === 'rehearse' && spec?.target?.kind === 'mcp_client' && !running && before && <Scorecard run={before} onOpen={(s) => { setSelected(s); setStage('diagnose') }} />}
         {stage === 'rehearse' && spec?.target?.kind !== 'mcp_client' && (before ? <Scorecard run={before} onOpen={(s) => { setSelected(s); setStage('diagnose') }} onEscalate={escalate} busy={running} /> : !running && (
           <Landing agent={spec?.name ?? 'the agent'} onRun={rehearse} runs={runs} onLoad={loadRun} />

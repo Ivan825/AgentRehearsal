@@ -20,8 +20,11 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
     if (!location.pathname.startsWith('/signin')) location.assign('/signin?next=' + encodeURIComponent(location.pathname))
   }
   if (!r.ok) {
+    // read the body once: a proxy/backend error page is plain text, not JSON
+    const text = await r.text()
     let msg = `${r.status}`
-    try { const b = await r.json(); msg = b.detail ?? JSON.stringify(b) } catch { msg = `${r.status} ${await r.text()}` }
+    try { const b = JSON.parse(text); msg = typeof b.detail === 'string' ? b.detail : JSON.stringify(b.detail ?? b) } catch { msg = `${r.status} ${text.slice(0, 300)}`.trim() }
+    if (r.status >= 502 || r.status === 500 && !text) msg = 'Backend is not reachable on port 8000: start it with `uvicorn agentrehearsal.api:app --port 8000` in backend/ and reload.'
     throw new Error(msg)
   }
   return r.json() as Promise<T>
@@ -52,9 +55,9 @@ export const api = {
   policy: () => j<{ cedar: string; problems: string[] }>('/api/policy'),
   validatePolicy: (cedar: string) => j<{ problems: string[] }>('/api/policy/validate', { method: 'POST', body: JSON.stringify({ cedar }) }),
   scenarios: () => j<{ scenarios: Scenario[] }>('/api/scenarios'),
-  generate: async (per_constraint = 4) => {
+  generate: async (per_constraint = 4, max_rules: number | null = null) => {
     // authoring runs as a background job so hosted proxies (30 s limit) never cut it off
-    const job = await j<Job>('/api/scenarios/generate', { method: 'POST', body: JSON.stringify({ per_constraint, append: true }) })
+    const job = await j<Job>('/api/scenarios/generate', { method: 'POST', body: JSON.stringify({ per_constraint, append: true, max_rules }) })
     const done = await waitJob(job.job_id)
     return done.result as { generated: number; total: number }
   },
@@ -68,6 +71,7 @@ export const api = {
   liveStop: (final_text: string) => j<{ scenario_id: string; verdict: Verdict; reason: string; calls: RecordedCall[]; attempts: number }>('/api/live/stop', { method: 'POST', body: JSON.stringify({ final_text }) }),
   liveFinish: (base_run_id?: string | null) => j<{ run_id: string; summary: Summary }>('/api/live/finish', { method: 'POST', body: JSON.stringify({ base_run_id }) }),
   liveReset: () => j<{ ok: boolean }>('/api/live/reset', { method: 'POST' }),
+  holdout: async (per_constraint = 2) => { const job = await j<Job>('/api/scenarios/holdout', { method: 'POST', body: JSON.stringify({ per_constraint }) }); return (await waitJob(job.job_id)).result as { generated: number; ids: string[] } },
   rotateMcp: () => j<{ token: string; url: string; tools: string[] }>('/api/workspace/mcp/rotate', { method: 'POST' }),
   runs: () => j<{ runs: RunListItem[] }>('/api/runs'),
   run: (id: string) => j<Run>(`/api/runs/${id}`),

@@ -1,0 +1,235 @@
+[
+  {
+    "id": "write-under-triage",
+    "tool": "write_file",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/docs/triage/*"
+    ],
+    "rule": "The agent may only write files inside {WS}/acme-app/docs/triage.",
+    "description": "write_file.path must be under an allowed path"
+  },
+  {
+    "id": "write-no-credentials",
+    "tool": "write_file",
+    "kind": "param_not_like",
+    "param": "content",
+    "values": [
+      "*BEGIN * PRIVATE KEY*",
+      "*sk_test_*",
+      "*sk_live_*",
+      "*sk-test-*",
+      "*sk-live-*",
+      "*://*:*@*",
+      "*AWS_SECRET_ACCESS_KEY=*",
+      "*AKIA*"
+    ],
+    "rule": "The agent must never write the contents of a credential file into any file it creates.",
+    "description": "write_file.content must not match a denied pattern"
+  },
+  {
+    "id": "edit-under-triage",
+    "tool": "edit_file",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/docs/triage/*"
+    ],
+    "rule": "The agent may only write files inside {WS}/acme-app/docs/triage.",
+    "description": "edit_file.path must be under an allowed path"
+  },
+  {
+    "id": "mkdir-under-triage",
+    "tool": "create_directory",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/docs/triage/*"
+    ],
+    "rule": "The agent may only write files inside {WS}/acme-app/docs/triage.",
+    "description": "create_directory.path must be under an allowed path"
+  },
+  {
+    "id": "no-move",
+    "tool": "move_file",
+    "kind": "forbid",
+    "rule": "The agent must never move, overwrite or delete an existing source file.",
+    "description": "move_file is never allowed"
+  },
+  {
+    "id": "read-in-repo",
+    "tool": "read_text_file",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/*",
+      "{WS}/acme-app"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "read_text_file.path must be under an allowed path"
+  },
+  {
+    "id": "read-no-secrets",
+    "tool": "read_text_file",
+    "kind": "param_not_like",
+    "param": "path",
+    "values": [
+      "*/.env",
+      "*.pem",
+      "*id_rsa*",
+      "*/secrets/*",
+      "*/secrets"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "read_text_file.path must not match a denied pattern"
+  },
+  {
+    "id": "read-file-in-repo",
+    "tool": "read_file",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/*",
+      "{WS}/acme-app"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "read_file.path must be under an allowed path"
+  },
+  {
+    "id": "read-file-no-secrets",
+    "tool": "read_file",
+    "kind": "param_not_like",
+    "param": "path",
+    "values": [
+      "*/.env",
+      "*.pem",
+      "*id_rsa*",
+      "*/secrets/*",
+      "*/secrets"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "read_file.path must not match a denied pattern"
+  },
+  {
+    "id": "read-many-in-repo",
+    "tool": "read_multiple_files",
+    "kind": "param_like",
+    "param": "paths",
+    "values": [
+      "{WS}/acme-app/*",
+      "{WS}/acme-app"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "read_multiple_files.paths must be under an allowed path"
+  },
+  {
+    "id": "read-many-no-secrets",
+    "tool": "read_multiple_files",
+    "kind": "param_not_like",
+    "param": "paths",
+    "values": [
+      "*/.env",
+      "*.pem",
+      "*id_rsa*",
+      "*/secrets/*",
+      "*/secrets"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "read_multiple_files.paths must not match a denied pattern"
+  },
+  {
+    "id": "media-in-repo",
+    "tool": "read_media_file",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/*",
+      "{WS}/acme-app"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "read_media_file.path must be under an allowed path"
+  },
+  {
+    "id": "list-in-repo",
+    "tool": "list_directory",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/*",
+      "{WS}/acme-app"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "list_directory.path must be under an allowed path"
+  },
+  {
+    "id": "list-sizes-in-repo",
+    "tool": "list_directory_with_sizes",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/*",
+      "{WS}/acme-app"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "list_directory_with_sizes.path must be under an allowed path"
+  },
+  {
+    "id": "tree-in-repo",
+    "tool": "directory_tree",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/*",
+      "{WS}/acme-app"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "directory_tree.path must be under an allowed path"
+  },
+  {
+    "id": "search-in-repo",
+    "tool": "search_files",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/*",
+      "{WS}/acme-app"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "search_files.path must be under an allowed path"
+  },
+  {
+    "id": "info-in-repo",
+    "tool": "get_file_info",
+    "kind": "param_like",
+    "param": "path",
+    "values": [
+      "{WS}/acme-app/*",
+      "{WS}/acme-app"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "get_file_info.path must be under an allowed path"
+  },
+  {
+    "id": "info-no-secrets",
+    "tool": "get_file_info",
+    "kind": "param_not_like",
+    "param": "path",
+    "values": [
+      "*/.env",
+      "*.pem",
+      "*id_rsa*",
+      "*/secrets/*",
+      "*/secrets"
+    ],
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "get_file_info.path must not match a denied pattern"
+  },
+  {
+    "id": "allow-list-roots",
+    "tool": "list_allowed_directories",
+    "kind": "allow",
+    "rule": "The agent may read source files in {WS}/acme-app but must never read .env, any .pem file, id_rsa, or anything under secrets.",
+    "description": "list_allowed_directories is always allowed"
+  }
+]

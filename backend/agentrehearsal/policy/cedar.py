@@ -45,7 +45,57 @@ def _condition(c: Constraint) -> str | None:
         return f"[{', '.join(_cedar_literal(v) for v in (c.values or []))}].contains({p})"
     if c.kind == "param_equals_session":
         return f"{p} == context.session.{c.session_key}"
+    if c.kind == "param_like":
+        pats = [_cedar_pattern(v) for v in (c.values or [])]
+        return "(" + " || ".join(f"{p} like {q}" for q in pats) + ")" if pats else None
+    if c.kind == "param_not_like":
+        pats = [_cedar_pattern(v) for v in (c.values or [])]
+        return " && ".join(f"!({p} like {q})" for q in pats) if pats else None
     raise ValueError(f"unknown constraint kind {c.kind}")
+
+
+def _cedar_pattern(v: str) -> str:
+    """A Cedar `like` pattern literal: `*` is the only wildcard; other characters are literal."""
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def normalise_path(v: str) -> str:
+    """Collapse `.`/`..` segments and duplicate slashes so a policy sees the path the OS would resolve.
+    `docs/triage/../triage/x.md` -> `docs/triage/x.md`; a leading `../` that escapes the root is kept visible."""
+    import posixpath
+
+    if not isinstance(v, str) or ("/" not in v and "\\" not in v and not v.startswith(".")):
+        return v
+    s = v.replace("\\", "/")
+    out = posixpath.normpath(s)
+    if s.endswith("/") and not out.endswith("/"):
+        out += "/"
+    return out
+
+
+_PATH_WORDS = ("path", "file", "dir", "folder", "source", "destination", "target", "location", "root", "uri")
+
+
+def _is_path_param(name: str) -> bool:
+    """Only parameters that name a location are normalised; a file's *content* is matched as written."""
+    n = name.lower()
+    return any(w in n for w in _PATH_WORDS) and "content" not in n
+
+
+def normalise_args(spec: AgentSpec | None, tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Path-like parameters of pattern constraints are normalised before the policy sees them."""
+    if not spec:
+        return args
+    params = {c.param for c in spec.constraints_for(tool) if c.kind in ("param_like", "param_not_like") and c.param and _is_path_param(c.param)}
+    if not params:
+        return args
+    out = dict(args)
+    for k in params:
+        if isinstance(out.get(k), str) and "\n" not in out[k]:
+            out[k] = normalise_path(out[k])
+        elif isinstance(out.get(k), list):
+            out[k] = [normalise_path(x) if isinstance(x, str) else x for x in out[k]]
+    return out
 
 
 def constraints_to_cedar(spec: AgentSpec, agentcore_target: str | None = None, gateway_arn: str | None = None) -> str:
@@ -121,6 +171,17 @@ class CedarPolicy:
         return cls(constraints_to_cedar(spec), spec)
 
     def evaluate(self, tool: str, args: dict[str, Any], session: dict[str, Any] | None = None) -> Decision:
+        args = normalise_args(self.spec, tool, args)
+        # a list-valued path parameter (read_multiple_files) is judged element by element: every element must pass
+        for k, v in list(args.items()):
+            if isinstance(v, list) and v and all(isinstance(x, str) for x in v) and any(c.param == k and c.kind in ("param_like", "param_not_like") for c in (self.spec.constraints_for(tool) if self.spec else [])):
+                worst: Decision | None = None
+                for x in v:
+                    d = self.evaluate(tool, {**args, k: x}, session)
+                    if not d.allowed:
+                        worst = d
+                        break
+                return worst or Decision(allowed=True, reasons=["all-elements"])
         request = {
             "principal": CEDAR_PRINCIPAL,
             "action": f'Action::"{tool}"',
@@ -152,7 +213,17 @@ class CedarPolicy:
                 out.append(c.id)
             elif c.kind == "param_equals_session" and args.get(c.param) != session.get(c.session_key or ""):
                 out.append(c.id)
+            elif c.kind == "param_like" and isinstance(args.get(c.param), str) and not any(_like(args[c.param], v) for v in (c.values or [])):
+                out.append(c.id)
+            elif c.kind == "param_not_like" and isinstance(args.get(c.param), str) and any(_like(args[c.param], v) for v in (c.values or [])):
+                out.append(c.id)
         return out or ["policy-deny:" + tool]
+
+
+def _like(value: str, pattern: str) -> bool:
+    import fnmatch
+
+    return fnmatch.fnmatchcase(value, pattern)
 
 
 def _num(v: Any) -> float | None:

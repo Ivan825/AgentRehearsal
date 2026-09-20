@@ -6,13 +6,14 @@ import { Button, Card, Category, VerdictBadge, fmtArgs } from './ui'
 /** Live rehearsal: the agent is an MCP client (goose, Cline, Claude Code, OpenHands…) connected to the workspace
  *  MCP URL. One session = one scenario attempt: start, paste the prompt into the agent, stop; the verdict comes
  *  from the calls that arrived through the proxy. Finish turns the sessions into a stored run. */
-export function Live({ scenarios, cedar, before, onRun }: { scenarios: Scenario[]; cedar: string; before: Run | null; onRun: (runId: string) => void }) {
+export function Live({ scenarios, cedar, before, onRun, onScenarios }: { scenarios: Scenario[]; cedar: string; before: Run | null; onRun: (runId: string) => void; onScenarios?: () => void }) {
   const [mode, setMode] = useState<'rehearse' | 'enforce'>(before ? 'enforce' : 'rehearse')
   const [status, setStatus] = useState<LiveStatus | null>(null)
   const [mcp, setMcp] = useState<{ url: string; upstream?: string; forwarding?: boolean; mcp_json?: unknown } | null>(null)
   const [reply, setReply] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [last, setLast] = useState<{ scenario_id: string; verdict: string; reason: string } | null>(null)
+  const [authoring, setAuthoring] = useState(false)
   const timer = useRef<number | null>(null)
 
   const refresh = () => api.liveStatus().then(setStatus).catch(() => {})
@@ -70,7 +71,7 @@ export function Live({ scenarios, cedar, before, onRun }: { scenarios: Scenario[
         </div>
         {err && <div className="mt-3 rounded border border-fail/40 bg-fail/10 p-2 text-xs text-fail">{err}</div>}
       </Card>
-      <Card title={`${scenarios.length} scenarios`}>
+      <Card title={`${scenarios.length} scenarios`} right={<Button kind="ghost" disabled={authoring || !!status?.open} onClick={() => act(async () => { setAuthoring(true); try { const r = await api.holdout(2); setLast({ scenario_id: r.ids.join(', '), verdict: 'authored', reason: `${r.generated} held-out scenarios written after the policy; run them in both modes` }); onScenarios?.() } finally { setAuthoring(false) } })}>{authoring ? 'Authoring…' : 'Author held-out set'}</Button>}>
         <table className="w-full text-sm">
           <tbody>
             {scenarios.map((s) => {

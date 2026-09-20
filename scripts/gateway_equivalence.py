@@ -52,6 +52,11 @@ def battery(spec: AgentSpec) -> list[dict]:
         elif c.kind == "param_equals_session" and c.param and c.session_key:
             cases.append({"why": f"{c.id}: session value", "tool": c.tool, "args": {**base, c.param: session.get(c.session_key, "")}, "expect": True})
             cases.append({"why": f"{c.id}: other value", "tool": c.tool, "args": {**base, c.param: "someone.else@example.com"}, "expect": False})
+        elif c.kind == "param_like" and c.param and c.values:
+            cases.append({"why": f"{c.id}: matching path", "tool": c.tool, "args": {**base, c.param: c.values[0].replace("*", "x")}, "expect": True})
+            cases.append({"why": f"{c.id}: outside", "tool": c.tool, "args": {**base, c.param: "/elsewhere/outside.txt"}, "expect": False})
+        elif c.kind == "param_not_like" and c.param and c.values:
+            cases.append({"why": f"{c.id}: denied pattern", "tool": c.tool, "args": {**base, c.param: c.values[0].replace("*", "x")}, "expect": False})
     constrained = {c.tool for c in spec.constraints}
     for t in spec.tools:
         if t.name not in constrained:

@@ -174,3 +174,106 @@ def call_upstream(url: str, auth_header: str, name: str, arguments: dict[str, An
         if "error" in body:
             raise RuntimeError(body["error"].get("message", "upstream error"))
         return body.get("result") or {}
+
+
+# ---- stdio upstream: launch a stdio MCP server (most published servers) and speak JSON-RPC over its pipes ----
+
+import shlex
+import subprocess
+import threading
+
+
+class StdioUpstream:
+    """One long-lived MCP server process per command. Requests are serialised; the process is restarted if it dies."""
+
+    def __init__(self, command: str):
+        self.command = command
+        self.proc: subprocess.Popen[str] | None = None
+        self.lock = threading.Lock()
+        self._id = 0
+
+    def _ensure(self) -> subprocess.Popen[str]:
+        if self.proc is None or self.proc.poll() is not None:
+            self.proc = subprocess.Popen(shlex.split(self.command), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            self._id = 0
+            self._request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "agentrehearsal-proxy", "version": "0.2.0"}})
+            self._notify("notifications/initialized")
+        return self.proc
+
+    def _write(self, msg: dict[str, Any]) -> None:
+        assert self.proc and self.proc.stdin
+        self.proc.stdin.write(json.dumps(msg) + "\n")
+        self.proc.stdin.flush()
+
+    def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+        self._write({"jsonrpc": "2.0", "method": method, "params": params or {}})
+
+    def _request(self, method: str, params: dict[str, Any] | None = None, timeout: float = 60.0) -> dict[str, Any]:
+        assert self.proc and self.proc.stdout
+        self._id += 1
+        rid = self._id
+        self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}})
+        import select
+        import time as _t
+
+        deadline = _t.time() + timeout
+        while _t.time() < deadline:
+            ready, _, _ = select.select([self.proc.stdout], [], [], 0.5)
+            if not ready:
+                if self.proc.poll() is not None:
+                    raise RuntimeError(f"upstream process exited with {self.proc.returncode}")
+                continue
+            line = self.proc.stdout.readline()
+            if not line:
+                raise RuntimeError("upstream closed its stdout")
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue   # log lines on stdout
+            if msg.get("id") == rid:
+                if "error" in msg:
+                    raise RuntimeError(msg["error"].get("message", "upstream error"))
+                return msg.get("result") or {}
+        raise TimeoutError(f"upstream did not answer {method} in {timeout}s")
+
+    def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        with self.lock:
+            self._ensure()
+            return self._request(method, params)
+
+    def stop(self) -> None:
+        with self.lock:
+            if self.proc and self.proc.poll() is None:
+                self.proc.terminate()
+            self.proc = None
+
+
+_stdio: dict[str, StdioUpstream] = {}
+_stdio_lock = threading.Lock()
+
+
+def stdio_upstream(command: str) -> StdioUpstream:
+    with _stdio_lock:
+        if command not in _stdio:
+            _stdio[command] = StdioUpstream(command)
+        return _stdio[command]
+
+
+def fetch_tools_stdio(command: str) -> list[dict[str, Any]]:
+    return list(stdio_upstream(command).call("tools/list").get("tools") or [])
+
+
+def fetch_tools_any(url_or_command: str, auth_header: str = "") -> list[dict[str, Any]]:
+    """URL (streamable HTTP) or a command line for a stdio server."""
+    if url_or_command.startswith(("http://", "https://")):
+        return fetch_tools(url_or_command, auth_header)
+    return fetch_tools_stdio(url_or_command)
+
+
+def call_upstream_any(target: Any, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """tools/call on whichever upstream the target configures (URL first, then command)."""
+    if getattr(target, "upstream_url", ""):
+        return call_upstream(target.upstream_url, getattr(target, "upstream_auth", ""), name, arguments)
+    if getattr(target, "upstream_command", ""):
+        return stdio_upstream(target.upstream_command).call("tools/call", {"name": name, "arguments": arguments})
+    raise RuntimeError("no upstream configured")

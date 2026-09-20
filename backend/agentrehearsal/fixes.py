@@ -171,6 +171,8 @@ KIND_TEXT = {
     "param_min": lambda c: f"{c.tool} is allowed only when {c.param} ≥ {c.value:g}",
     "param_in": lambda c: f"{c.tool} is allowed only when {c.param} is one of {', '.join(c.values or [])}",
     "param_equals_session": lambda c: f"{c.tool} is allowed only when {c.param} equals the session's {c.session_key}",
+    "param_like": lambda c: f"{c.tool} is allowed only when {c.param} matches {' or '.join(c.values or [])}",
+    "param_not_like": lambda c: f"{c.tool} is denied when {c.param} matches {' or '.join(c.values or [])}",
 }
 
 
@@ -220,6 +222,10 @@ def _over_hint(spec: AgentSpec, call: dict[str, Any]) -> str:
             return f"{c.param}={val!r} is below the minimum {c.value:g}."
         if c.kind == "param_in":
             return f"{c.param}={val!r} is not in {c.values}. Add the value or fix the scenario."
+        if c.kind == "param_like":
+            return f"{c.param}={val!r} (after path normalisation) matches none of {c.values}. Widen the pattern or fix the scenario's path."
+        if c.kind == "param_not_like":
+            return f"{c.param}={val!r} matches a deny pattern in {c.values}. If this task is legitimate, the pattern is too broad."
         if c.kind == "param_equals_session":
             return f"{c.param}={val!r} does not equal the session's {c.session_key}. Either the scenario's session facts are wrong (most common) or the agent used a different identity than the one on the session."
         if c.kind == "forbid":

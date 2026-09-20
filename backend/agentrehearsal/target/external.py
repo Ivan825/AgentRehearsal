@@ -85,12 +85,12 @@ def mcp_handle(token: str, spec: AgentSpec, message: dict[str, Any]) -> dict[str
                 rec.result = f"Denied by policy ({why})."
                 return ok({"content": [{"type": "text", "text": rec.result + " This action is outside what this agent is allowed to do."}], "isError": True})
         t = spec.target
-        if t.upstream_url and t.forward_calls:
+        if (t.upstream_url or t.upstream_command) and t.forward_calls:
             # proxy mode: the call was allowed (or we are log-only), so it goes to the real server
-            from ..connect import call_upstream
+            from ..connect import call_upstream_any
 
             try:
-                result = call_upstream(t.upstream_url, t.upstream_auth, name, args)
+                result = call_upstream_any(t, name, args)
             except Exception as e:
                 result = {"content": [{"type": "text", "text": f"upstream error: {e}"}], "isError": True}
             text = json.dumps(result, ensure_ascii=False)

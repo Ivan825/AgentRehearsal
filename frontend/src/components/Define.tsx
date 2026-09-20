@@ -4,6 +4,14 @@ import { CATEGORY_LABEL } from './ui'
 import { api } from '../api'
 import { Button, Card, Category } from './ui'
 
+// shown if /api/models is unreachable, so the picker is never empty
+const FALLBACK_MODELS = [
+  { id: 'us.amazon.nova-lite-v1:0', label: 'Amazon Nova Lite', note: 'default', provider: 'bedrock', available: true },
+  { id: 'us.amazon.nova-pro-v1:0', label: 'Amazon Nova Pro', provider: 'bedrock', available: true },
+  { id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', label: 'Claude Haiku 4.5', provider: 'bedrock', available: true },
+  { id: 'global.anthropic.claude-opus-4-6-v1', label: 'Claude Opus 4.6', provider: 'bedrock', available: true },
+]
+
 const KIND_TEXT: Record<string, (c: Constraint) => string> = {
   allow: () => 'always allowed',
   forbid: () => 'never allowed',
@@ -11,6 +19,8 @@ const KIND_TEXT: Record<string, (c: Constraint) => string> = {
   param_min: (c) => `${c.param} ≥ ${c.value}`,
   param_in: (c) => `${c.param} ∈ {${(c.values ?? []).join(', ')}}`,
   param_equals_session: (c) => `${c.param} must equal session.${c.session_key}`,
+  param_like: (c) => `${c.param} must match ${(c.values ?? []).join(' or ')}`,
+  param_not_like: (c) => `${c.param} must not match ${(c.values ?? []).join(' or ')}`,
 }
 const CATEGORIES = ['allowed', 'boundary', 'scope_violation', 'parameter_violation', 'direct_injection', 'indirect_injection', 'destructive_action']
 
@@ -102,7 +112,7 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
   const [models, setModels] = useState<{ id: string; label: string; note?: string; provider?: string; available?: boolean }[]>([])
   const [mcp, setMcp] = useState<{ url: string; token: string } | null>(null)
   const [examples, setExamples] = useState<Example[]>([])
-  useEffect(() => { api.models().then((m) => setModels(m.models)).catch(() => {}); api.workspaceMcp().then(setMcp).catch(() => {}); api.examples().then((r) => setExamples(r.examples)).catch(() => {}) }, [])
+  useEffect(() => { api.models().then((m) => setModels(m.models)).catch(() => setModels(FALLBACK_MODELS)); api.workspaceMcp().then(setMcp).catch(() => {}); api.examples().then((r) => setExamples(r.examples)).catch(() => {}) }, [])
   const [draft, setDraft] = useState<AgentSpec>(spec)
   const [rules, setRules] = useState(spec.rules.join('\n'))
   const [scenarios, setScenarios] = useState<Scenario[]>([])
@@ -114,6 +124,7 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
   const [fetched, setFetched] = useState<ToolDef[] | null>(null)
   const [rulesWhy, setRulesWhy] = useState<string[]>([])
   const [showConnect, setShowConnect] = useState(false)
+  const [perRule, setPerRule] = useState(2)
   const [notes, setNotes] = useState<{ id: string; confidence: number; ambiguity: string }[]>([])
   const [problems, setProblems] = useState<string[]>([])
   const [coverage, setCoverage] = useState<Coverage | null>(null)
@@ -158,7 +169,7 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
     const r = await api.resetExample(id); onSpec(r.spec); const s = await api.scenarios(); setScenarios(s.scenarios)
     setMsg(r.scenarios ? `${r.example} loaded with ${r.scenarios} scenarios. Next: ▶ Run Rehearsal.` : `${r.example} loaded. It ships with no scenarios: press Generate with Bedrock to author them from the rules, then run the rehearsal.`)
   })
-  const generate = () => run('gen', async () => { const r = await api.generate(4); const s = await api.scenarios(); setScenarios(s.scenarios); setMsg(`Bedrock wrote ${r.generated} scenarios; ${r.total} ready.`) })
+  const generate = () => run('gen', async () => { const r = await api.generate(perRule === 0 ? 1 : perRule, perRule === 0 ? 8 : null); const s = await api.scenarios(); setScenarios(s.scenarios); setMsg(`Bedrock wrote ${r.generated} scenarios; ${r.total} ready.`) })
   const exportJson = () => {
     const blob = new Blob([JSON.stringify({ spec: draft, scenarios }, null, 2)], { type: 'application/json' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${draft.name || 'agent'}.agentrehearsal.json`; a.click()
@@ -177,6 +188,12 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
     setMsg(`${r.spec.name} is set up: ${r.spec.tools.length} tools with simulated responses, ${r.spec.rules.length} suggested rules, ${r.spec.constraints.length} constraints. Check the rules, then Generate with Bedrock and run the rehearsal.`)
   })
   const removeScenario = (id: string) => run('sc', async () => { const next = scenarios.filter((s) => s.id !== id); await api.saveScenarios(next); setScenarios(next) })
+  const clearScenarios = (keep: (s: Scenario) => boolean, what: string) => run('sc', async () => {
+    const next = scenarios.filter(keep)
+    if (next.length === scenarios.length) return
+    if (!confirm(`Remove ${scenarios.length - next.length} ${what}? Generate with Bedrock appends, so clear first if you want a small set.`)) return
+    await api.saveScenarios(next); setScenarios(next); setMsg(`${next.length} scenarios left.`)
+  })
   const addScenario = () => run('sc', async () => {
     const id = `C${String(scenarios.filter((s) => s.id.startsWith('C')).length + 1).padStart(2, '0')}`
     const sc: Scenario = { id, category: newSc.category ?? 'parameter_violation', title: newSc.title || 'Custom scenario', prompt: newSc.prompt ?? '', customer_id: '', attachment_id: newSc.attachment_id || null, session: newSc.session ?? {}, expected: newSc.expected ?? 'deny', must_call: newSc.expected === 'allow' ? newSc.must_call || null : null, runs: 1, source: 'seed', rationale: newSc.rationale ?? 'Custom scenario' }
@@ -348,6 +365,10 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
       <Card title={`${scenarios.length} scenarios · ${scenarios.filter((s) => s.source === 'seed').length} seed, ${scenarios.filter((s) => s.source !== 'seed').length} authored by Bedrock`} className="lg:col-span-3" right={
         <div className="flex items-center gap-2">
           <button onClick={() => setShowAdd(!showAdd)} className="text-xs text-accent">+ add scenario</button>
+          {scenarios.length > 0 && <button onClick={() => clearScenarios(() => false, 'scenarios')} disabled={!!busy} className="text-xs text-muted hover:text-fail" title="Generate with Bedrock appends to the list; clear first for a small set">clear all</button>}
+          <label className="flex items-center gap-1 text-xs text-muted" title="scenarios per rule that can be broken">per rule
+            <select value={perRule} onChange={(e) => setPerRule(Number(e.target.value))} className="rounded border border-line bg-ink px-1.5 py-1 text-xs text-text"><option value={0}>demo (≈10 total)</option>{[1, 2, 3, 4, 6].map((n) => <option key={n} value={n}>{n}</option>)}</select>
+          </label>
           <Button kind="ghost" onClick={generate} disabled={!!busy}>{busy === 'gen' ? 'Authoring with Bedrock…' : 'Generate with Bedrock'}</Button>
         </div>
       }>

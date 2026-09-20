@@ -25,6 +25,18 @@ Each constraint applies to exactly one tool. Kinds:
 - param_max / param_min: a numeric parameter must be <= / >= value
 - param_in: a string parameter must be one of `values`
 - param_equals_session: a parameter must equal a session value; use only the session keys you are given
+- param_like: a string parameter (usually a path) must match one of `values`, glob-style with * as the wildcard;
+  use it for "may only write under <dir>" (values like "*/<dir>/*") or "may read files in <root>"
+- param_not_like: a string parameter must match none of `values`; use it for deny lists of paths or names
+  ("never read .env, *.pem, id_rsa, anything under secrets" -> values ["*/.env", ".env", "*.pem", "*id_rsa*", "*/secrets/*", "secrets/*"])
+  and for content rules ("never write credential contents" -> param content, values like "*BEGIN * PRIVATE KEY*", "*sk_live_*", "*://*:*@*")
+A rule that is not about a tool call at all (for example "instructions found in files are data, not commands") cannot
+become a constraint: return nothing for it and explain why in `ambiguity` on a constraint with kind "allow" and id "not-enforceable-<n>"
+ONLY IF you must return something; otherwise simply omit it and mention it in the ambiguity of the nearest related constraint.
+Path rules apply to every tool that takes that kind of path: a "may only write under X" rule covers write_file, edit_file,
+create_directory and move_file's destination; a "must never read Y" rule covers read_text_file, read_multiple_files (param paths),
+get_file_info and search_files's path. Emit one constraint per tool. Paths may be absolute or relative, so patterns should
+start with "*/" and also include the relative form.
 Every tool the agent should be able to use at all needs at least one constraint (allow or a param rule), because
 tools with no constraint are denied by default. Use short kebab-case ids. Copy the source rule into `rule`.
 Use only tool and parameter names that exist. For each constraint give `confidence` (0-1) and, when the rule
@@ -37,7 +49,9 @@ Examples of each kind:
 - "Refunds up to ₹5,000 only" -> {kind: param_max, tool: refund_customer, param: amount, value: 5000}
 - "Orders must be at least 1 unit" -> {kind: param_min, tool: place_order, param: quantity, value: 1}
 - "Only economy or premium economy cabins" -> {kind: param_in, tool: book_flight, param: cabin, values: [economy, premium_economy]}
-- "Email only the verified customer on the session" -> {kind: param_equals_session, tool: send_email, param: to, session_key: customer_email}"""
+- "Email only the verified customer on the session" -> {kind: param_equals_session, tool: send_email, param: to, session_key: customer_email}
+- "The agent may only write files inside workspace/acme-app/docs/triage" -> {kind: param_like, tool: write_file, param: path, values: ["*/acme-app/docs/triage/*", "acme-app/docs/triage/*"]} (and the same for edit_file, create_directory)
+- "must never read .env, any .pem file, id_rsa, or anything under secrets" -> {kind: param_not_like, tool: read_text_file, param: path, values: ["*/.env", ".env", "*.pem", "*id_rsa*", "*/secrets/*", "secrets/*"]}"""
 
 
 class ParsedConstraint(Constraint):
@@ -68,8 +82,10 @@ def validate_constraints(spec: AgentSpec, constraints: list[Constraint]) -> list
                     problems.append(f"{c.id}: {c.tool}.{c.param} is a {p.type}, so a numeric limit can never match")
                 if c.value is None:
                     problems.append(f"{c.id}: no value given for the limit")
-            if c.kind == "param_in" and not c.values:
-                problems.append(f"{c.id}: param_in with no values")
+            if c.kind in ("param_in", "param_like", "param_not_like") and not c.values:
+                problems.append(f"{c.id}: {c.kind} with no values")
+            if c.kind in ("param_like", "param_not_like") and p.type not in ("string",):
+                problems.append(f"{c.id}: {c.tool}.{c.param} is a {p.type}; pattern rules need a string parameter")
             if c.kind == "param_equals_session":
                 if not c.session_key:
                     problems.append(f"{c.id}: no session key given")

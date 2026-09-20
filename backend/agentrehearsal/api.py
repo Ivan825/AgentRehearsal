@@ -56,12 +56,14 @@ def _project(user: dict[str, Any]) -> dict[str, Any]:
     return _projects[uid]
 
 
-def _persist(user: dict[str, Any]) -> None:
+def _persist(user: dict[str, Any], strict: bool = False) -> None:
     p = _project(user)
     try:
         get_store().put_project(user["id"], {"spec": p["spec"].model_dump(), "scenarios": [s.model_dump() for s in p["scenarios"]], "mcp_token": p["mcp_token"]})
-    except Exception as e:  # persistence is best effort
+    except Exception as e:  # persistence is best effort, but an edit the user made must not vanish silently
         print(f"[store] project not saved: {e}")
+        if strict:
+            raise HTTPException(500, f"saved in memory only, the store rejected it: {type(e).__name__}: {str(e)[:200]}")
 
 
 # ---- auth --------------------------------------------------------------------------------
@@ -110,7 +112,7 @@ def workspace_mcp(request: Request, user: dict[str, Any] = auth.User) -> dict[st
     p = _project(user)
     base = _public_base(request)
     t = p["spec"].target
-    return {"token": p["mcp_token"], "url": f"{base}/mcp/{p['mcp_token']}", "tools": [t_.name for t_ in p["spec"].tools], "upstream": t.upstream_url, "forwarding": bool(t.upstream_url and t.forward_calls),
+    return {"token": p["mcp_token"], "url": f"{base}/mcp/{p['mcp_token']}", "tools": [t_.name for t_ in p["spec"].tools], "upstream": t.upstream_url or t.upstream_command, "forwarding": bool((t.upstream_url or t.upstream_command) and t.forward_calls),
             "mcp_json": {"mcpServers": {"agentrehearsal": {"type": "http", "url": f"{base}/mcp/{p['mcp_token']}"}}}}
 
 
@@ -245,11 +247,12 @@ class ConnectIn(BaseModel):
 
 @app.post("/api/tools/connect")
 def connect_mcp(body: ConnectIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
-    """Read an MCP server's tool list over streamable HTTP. Schema only; the server's tools are never called."""
-    from .connect import fetch_tools, tools_from_mcp
+    """Read an MCP server's tool list. `url` is a streamable-HTTP URL, or a command line for a stdio server
+    (e.g. "npx -y @modelcontextprotocol/server-filesystem /path"). Schema only; the server's tools are never called."""
+    from .connect import fetch_tools_any, tools_from_mcp
 
     try:
-        raw = fetch_tools(body.url, body.auth_header)
+        raw = fetch_tools_any(body.url, body.auth_header)
     except Exception as e:
         raise HTTPException(502, f"could not read tools from {body.url}: {type(e).__name__}: {e}")
     tools = tools_from_mcp(raw)
@@ -342,14 +345,16 @@ def get_scenarios(user: dict[str, Any] = auth.User) -> dict[str, Any]:
 
 @app.put("/api/scenarios")
 def put_scenarios(body: ScenarioSet, user: dict[str, Any] = auth.User) -> dict[str, Any]:
-    _project(user)["scenarios"] = body.scenarios
-    _persist(user)
+    with _lock:
+        _project(user)["scenarios"] = body.scenarios
+    _persist(user, strict=True)
     return {"count": len(body.scenarios)}
 
 
 class GenerateIn(BaseModel):
     per_constraint: int = 4
     append: bool = True
+    max_rules: int | None = None   # demo-size: only this many rules, spread over the list
 
 
 @app.post("/api/scenarios/generate")
@@ -366,15 +371,19 @@ def generate_endpoint(body: GenerateIn, user: dict[str, Any] = auth.User) -> dic
 
     def work() -> None:
         try:
-            ss = generate_scenarios(p["spec"], per_constraint=body.per_constraint)
+            ss = generate_scenarios(p["spec"], per_constraint=body.per_constraint, max_rules=body.max_rules)
             with _lock:
-                existing = [s for s in p["scenarios"] if s.source == "seed"] if body.append else []
-                # renumber generated ids after any that already exist
-                start = len([s for s in p["scenarios"] if s.source == "generated"]) if body.append else 0
-                kept = [s for s in p["scenarios"] if s.source == "generated"] if body.append else []
-                for i, s in enumerate(ss.scenarios):
-                    s.id = f"G{start + i + 1:02d}"
-                p["scenarios"] = existing + kept + ss.scenarios
+                # append keeps everything already there (seed, hand-added, held-out, escalated); new ids never collide
+                kept = list(p["scenarios"]) if body.append else []
+                taken = {s.id for s in kept}
+                n = 0
+                for s in ss.scenarios:
+                    n += 1
+                    while f"G{n:02d}" in taken:
+                        n += 1
+                    s.id = f"G{n:02d}"
+                    taken.add(s.id)
+                p["scenarios"] = kept + ss.scenarios
                 job["result"] = {"generated": len(ss.scenarios), "total": len(p["scenarios"])}
                 job["status"] = "done"
             _persist(user)
@@ -427,6 +436,39 @@ def scenario_coverage(user: dict[str, Any] = auth.User) -> dict[str, Any]:
         gaps = [k for k in cats if counts[k] == 0 and k not in ("boundary",) and not (k == "indirect_injection" and not any(r.injection for t in spec.tools for r in t.responses))]
         rows.append({"id": c.id, "tool": c.tool, "kind": c.kind, "counts": counts, "total": sum(counts.values()), "gaps": gaps})
     return {"categories": cats, "rows": rows, "scenarios": len(p["scenarios"]), "with_expected_call": sum(1 for s in p["scenarios"] if s.expected_call)}
+
+
+class HoldoutIn(BaseModel):
+    per_constraint: int = 2
+
+
+@app.post("/api/scenarios/holdout")
+def author_holdout(body: HoldoutIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """Author a held-out set (told to avoid every existing scenario) and append it to the project, for agents that
+    are driven by hand or by a script (live sessions) rather than by /api/validate."""
+    from .scenarios.generator import generate_scenarios
+
+    p = _project(user)
+    job = _new_job(user, kind="generate", phase="authoring")
+
+    def work() -> None:
+        try:
+            existing = list(p["scenarios"])
+            avoid = list(dict.fromkeys([s.title for s in existing] + [s.prompt for s in existing]))
+            start = len([s for s in existing if s.source == "holdout"]) + 1
+            ss = generate_scenarios(p["spec"], per_constraint=body.per_constraint, avoid=avoid, source="holdout")
+            for i, sc in enumerate(ss.scenarios):
+                sc.id = f"H{start + i:02d}"
+            with _lock:
+                p["scenarios"] = existing + ss.scenarios
+                job.update(result={"generated": len(ss.scenarios), "ids": [sc.id for sc in ss.scenarios]}, status="done", phase="done")
+            _persist(user)
+        except Exception as e:
+            job["status"] = "error"
+            job["error"] = f"held-out authoring failed: {type(e).__name__}: {e}"
+
+    threading.Thread(target=work, daemon=True).start()
+    return _public_job(job)
 
 
 class EscalateIn(BaseModel):
@@ -948,8 +990,10 @@ def list_models(user: dict[str, Any] = auth.User) -> dict[str, Any]:
     live = False
     try:
         import boto3
+        from botocore.config import Config as _BotoConfig
 
-        br = boto3.client("bedrock", region_name=config.AWS_REGION)
+        # curated list must never wait on the network: one quick attempt, no retries
+        br = boto3.client("bedrock", region_name=config.AWS_REGION, config=_BotoConfig(connect_timeout=2, read_timeout=4, retries={"max_attempts": 1}))
         for prof in br.list_inference_profiles(maxResults=100).get("inferenceProfileSummaries", []):
             if prof.get("status") != "ACTIVE":
                 continue
