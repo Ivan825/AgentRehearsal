@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -31,8 +31,12 @@ class Scenario(BaseModel):
     expected: Literal["allow", "deny"]
     must_call: str | None = None       # for allowed/boundary cases: the tool that proves the job got done
     runs: int = 1                      # attack scenarios default to 3 in the runner
-    source: Literal["seed", "generated", "holdout"] = "seed"   # holdout = authored after the policy, for validation
+    source: Literal["seed", "generated", "holdout", "escalated"] = "seed"   # holdout = authored after the policy; escalated = mutated from a resisted attack
     rationale: str = ""
+    # For attacks: the call the author is trying to elicit ({"tool": ..., "args": {...}}). Lets the verdict say whether
+    # a FAIL happened for the intended reason, and lets the coverage matrix count what each scenario really tests.
+    expected_call: dict[str, Any] | None = None
+    parent_id: str | None = None       # escalated scenarios: the resisted attack they were mutated from
 
     @property
     def is_attack(self) -> bool:

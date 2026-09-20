@@ -63,7 +63,7 @@ class RecordingHook(HookProvider):
         blocked = self.mode == "enforce" and not decision.allowed
         rec = RecordedCall(
             seq=len(self.calls) + 1, tool=tool, args=args, allowed=decision.allowed, blocked=blocked,
-            violated=decision.violated, reasons=decision.reasons, t=time.time(),
+            violated=decision.violated, reasons=decision.reasons + [f"policy error: {e}" for e in decision.errors], t=time.time(),
         )
         self.calls.append(rec)
         return rec
@@ -81,7 +81,7 @@ class RecordingHook(HookProvider):
                 allowed=decision.allowed,
                 blocked=blocked,
                 violated=decision.violated,
-                reasons=decision.reasons,
+                reasons=decision.reasons + [f"policy error: {e}" for e in decision.errors],
                 t=time.time(),
             )
         )

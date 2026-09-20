@@ -69,7 +69,7 @@ class FileStore:
         with _lock:
             d = self._read("runs")
             d[record["run_id"]] = {"user_id": user_id, "run_id": record["run_id"], "mode": record["mode"], "model": record["model"], "agent": record["agent"],
-                                   "started_at": record["started_at"], "base_run_id": record.get("base_run_id"), "holdout": bool(record.get("holdout")), "summary": record["summary"], "packed": _pack(record)}
+                                   "started_at": record["started_at"], "base_run_id": record.get("base_run_id"), "holdout": bool(record.get("holdout")), "variant": record.get("variant") or "", "summary": record["summary"], "packed": _pack(record)}
             self._write("runs", d)
 
     def list_runs(self, user_id: str) -> list[dict[str, Any]]:
@@ -111,7 +111,7 @@ class DynamoStore:
     def put_run(self, user_id: str, record: dict[str, Any]) -> None:
         self.table.put_item(Item={
             "pk": f"ACCOUNT#{user_id}", "sk": f"RUN#{record['run_id']}", "run_id": record["run_id"], "mode": record["mode"], "model": record["model"],
-            "agent": record["agent"], "started_at": record["started_at"], "base_run_id": record.get("base_run_id") or "", "holdout": bool(record.get("holdout")),
+            "agent": record["agent"], "started_at": record["started_at"], "base_run_id": record.get("base_run_id") or "", "holdout": bool(record.get("holdout")), "variant": record.get("variant") or "",
             "summary": json.loads(json.dumps(record["summary"]), parse_float=str), "packed": _pack(record),
         })
 
@@ -119,7 +119,7 @@ class DynamoStore:
         from boto3.dynamodb.conditions import Key
 
         resp = self.table.query(KeyConditionExpression=Key("pk").eq(f"ACCOUNT#{user_id}") & Key("sk").begins_with("RUN#"),
-                                ProjectionExpression="run_id, #m, #mo, #ag, started_at, base_run_id, holdout, summary", ExpressionAttributeNames={"#m": "mode", "#mo": "model", "#ag": "agent"})
+                                ProjectionExpression="run_id, #m, #mo, #ag, started_at, base_run_id, holdout, variant, summary", ExpressionAttributeNames={"#m": "mode", "#mo": "model", "#ag": "agent"})
         rows = resp.get("Items", [])
         for r in rows:
             r["summary"] = json.loads(json.dumps(r["summary"], default=float))

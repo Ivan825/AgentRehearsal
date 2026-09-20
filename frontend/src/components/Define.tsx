@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { AgentSpec, Constraint, Example, MockResponse, Scenario, ToolDef } from '../types'
+import type { AgentSpec, Constraint, Coverage, Example, MockResponse, Scenario, ToolDef } from '../types'
+import { CATEGORY_LABEL } from './ui'
 import { api } from '../api'
 import { Button, Card, Category } from './ui'
 
@@ -91,7 +92,7 @@ function ScenarioRow({ s, onRemove }: { s: Scenario; onRemove: () => void }) {
       <span className="w-10 shrink-0 font-mono text-xs text-muted">{s.id}</span>
       <span className="w-36 shrink-0"><Category c={s.category} /></span>
       <span className="flex-1"><div>{s.title}</div><div className="line-clamp-1 text-xs text-muted">{s.prompt}</div></span>
-      <span className="shrink-0 font-mono text-[10px] text-muted">{s.expected}{s.must_call ? ` · ${s.must_call}` : ''}{s.source === 'generated' ? ' · bedrock' : s.source === 'holdout' ? ' · held-out' : ''}</span>
+      <span className="shrink-0 font-mono text-[10px] text-muted">{s.expected}{s.must_call ? ` · ${s.must_call}` : ''}{s.source === 'generated' ? ' · bedrock' : s.source === 'holdout' ? ' · held-out' : s.source === 'escalated' ? ` · escalated${s.parent_id ? ` from ${s.parent_id}` : ''}` : ''}{s.expected_call?.tool ? ` · aims at ${s.expected_call.tool}` : ''}</span>
       <button onClick={onRemove} className="shrink-0 text-xs text-muted hover:text-fail">✕</button>
     </li>
   )
@@ -109,6 +110,15 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [mcpUrl, setMcpUrl] = useState(''); const [mcpAuth, setMcpAuth] = useState(''); const [mcpName, setMcpName] = useState(''); const [mcpPurpose, setMcpPurpose] = useState('')
+  const [fetched, setFetched] = useState<ToolDef[] | null>(null)
+  const [rulesWhy, setRulesWhy] = useState<string[]>([])
+  const [showConnect, setShowConnect] = useState(false)
+  const [notes, setNotes] = useState<{ id: string; confidence: number; ambiguity: string }[]>([])
+  const [problems, setProblems] = useState<string[]>([])
+  const [coverage, setCoverage] = useState<Coverage | null>(null)
+  const refreshCoverage = () => api.coverage().then(setCoverage).catch(() => {})
+  useEffect(() => { refreshCoverage(); api.validateConstraints().then((r) => setProblems(r.problems)).catch(() => {}) }, [spec, scenarios.length])
   const [newSc, setNewSc] = useState<Partial<Scenario>>({ category: 'parameter_violation', expected: 'deny', prompt: '', title: '' })
   const dirty = JSON.stringify(draft) !== JSON.stringify(spec) || rules !== spec.rules.join('\n')
 
@@ -137,9 +147,10 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
   const reparse = () => run('parse', async () => {
     const lines = rules.split('\n').map((s) => s.trim()).filter(Boolean)
     const saved = await api.saveSpec({ ...draft, rules: lines })
-    const { constraints } = await api.parseRules(lines)
-    const next = await api.saveSpec({ ...saved, constraints })
-    onSpec(next); setMsg(`Bedrock parsed ${constraints.length} constraints. Check them below, then save.`)
+    const r = await api.parseRules(lines)
+    const next = await api.saveSpec({ ...saved, constraints: r.constraints })
+    setNotes(r.notes); setProblems(r.problems)
+    onSpec(next); setMsg(`Bedrock parsed ${r.constraints.length} constraints${r.problems.length ? `, with ${r.problems.length} problem${r.problems.length === 1 ? '' : 's'} to look at` : ''}. Check them below.`)
   })
   const loadExample = (id: string) => run('example', async () => {
     const authored = scenarios.filter((s) => s.source !== 'seed').length
@@ -159,6 +170,12 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
     if (Array.isArray(data.tools) && !data.spec) { const r = await api.importTools(data.tools); set({ tools: [...draft.tools, ...r.tools] }) }
     setMsg('Imported.')
   })
+  const connect = () => run('connect', async () => { const r = await api.connectMcp(mcpUrl.trim(), mcpAuth.trim()); setFetched(r.tools); setMsg(`Read ${r.count} tools from the server (schema only; nothing was called). Next: let Bedrock draft the world and the rules.`) })
+  const draftWorld = () => run('draft', async () => {
+    const r = await api.draftWorld(mcpName.trim(), mcpPurpose.trim(), fetched ?? [])
+    onSpec(r.spec); setRulesWhy(r.rules_with_reasons); setScenarios([])
+    setMsg(`${r.spec.name} is set up: ${r.spec.tools.length} tools with simulated responses, ${r.spec.rules.length} suggested rules, ${r.spec.constraints.length} constraints. Check the rules, then Generate with Bedrock and run the rehearsal.`)
+  })
   const removeScenario = (id: string) => run('sc', async () => { const next = scenarios.filter((s) => s.id !== id); await api.saveScenarios(next); setScenarios(next) })
   const addScenario = () => run('sc', async () => {
     const id = `C${String(scenarios.filter((s) => s.id.startsWith('C')).length + 1).padStart(2, '0')}`
@@ -175,10 +192,34 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
           <option value="">Start from an example…</option>
           {examples.map((x) => <option key={x.id} value={x.id} title={x.blurb}>{x.name} · {x.scenarios ? `${x.scenarios} seed scenarios` : 'no seeds, Bedrock authors them'}</option>)}
         </select>
+        <Button kind="ghost" onClick={() => setShowConnect(!showConnect)}>{showConnect ? 'Hide' : 'Connect MCP server'}</Button>
         <label className="inline-flex cursor-pointer items-center rounded-md border border-line px-3.5 py-2 text-sm font-semibold hover:bg-panel-2">Import JSON<input type="file" accept="application/json" className="hidden" onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} /></label>
         <Button kind="ghost" onClick={exportJson}>Export JSON</Button>
         <Button onClick={save} disabled={!!busy || !dirty}>{busy === 'save' ? 'Saving…' : 'Save agent'}</Button>
       </div>
+      {showConnect && (
+        <div className="rounded-lg border border-accent/30 bg-accent/5 p-4">
+          <div className="text-sm font-semibold">Connect your agent's MCP server</div>
+          <p className="mt-1 text-xs text-muted">We read its tool list (initialize + tools/list) and nothing else: the real tools are never called during a rehearsal. Bedrock then drafts a simulated world for them (canned responses, one poisoned document, session facts) and suggests rules for you to confirm.</p>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            <input value={mcpUrl} onChange={(e) => setMcpUrl(e.target.value)} placeholder="https://your-server.example.com/mcp" className={`${input} font-mono text-xs md:col-span-2`} />
+            <input value={mcpAuth} onChange={(e) => setMcpAuth(e.target.value)} placeholder="Authorization header value (optional), e.g. Bearer …" className={`${input} font-mono text-xs md:col-span-2`} />
+            <input value={mcpName} onChange={(e) => setMcpName(e.target.value)} placeholder="Agent name, e.g. BillingBot" className={input} />
+            <input value={mcpPurpose} onChange={(e) => setMcpPurpose(e.target.value)} placeholder="What the agent is for, one sentence" className={input} />
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button kind="ghost" onClick={connect} disabled={!!busy || !mcpUrl.trim()}>{busy === 'connect' ? 'Reading tools…' : '1 · Read tools'}</Button>
+            <Button onClick={draftWorld} disabled={!!busy || !fetched}>{busy === 'draft' ? 'Drafting with Bedrock…' : `2 · Draft world & rules${fetched ? ` for ${fetched.length} tools` : ''}`}</Button>
+            {fetched && <span className="font-mono text-xs text-muted">{fetched.map((t) => t.name).join(', ')}</span>}
+          </div>
+          {rulesWhy.length > 0 && (
+            <div className="mt-3 rounded border border-line bg-panel-2 p-3 text-xs">
+              <div className="font-semibold text-text">Suggested rules and why (edit them in the Rules box below)</div>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted">{rulesWhy.map((r, i) => <li key={i}>{r}</li>)}</ul>
+            </div>
+          )}
+        </div>
+      )}
       {msg && <div className="rounded border border-pass/40 bg-pass/10 p-2.5 text-sm text-pass">{msg}</div>}
       {err && <div className="rounded border border-fail/40 bg-fail/10 p-2.5 text-sm text-fail">{err}</div>}
 
@@ -222,7 +263,15 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
               <option value="simulated">AgentRehearsal builds it (system prompt + model above + simulated tools)</option>
               <option value="http">My own agent behind an HTTP endpoint</option>
               <option value="agentcore_runtime">My own agent on Bedrock AgentCore Runtime</option>
+              <option value="mcp_client">My own agent connects here as an MCP client (goose, Cline, Claude Code, OpenHands…)</option>
             </select>
+            {draft.target.kind === 'mcp_client' && (<>
+              <p className="mt-2 text-xs text-muted">Nothing to adapt: the agent stays exactly as published and gets one extra MCP server, this one. AgentRehearsal serves the tools on this page, records every call, and applies the policy. Optionally put your real MCP server behind it.</p>
+              <div className={`mt-2 ${label}`}>Real MCP server behind the proxy (optional)</div>
+              <input value={draft.target.upstream_url ?? ''} onChange={(e) => set({ target: { ...draft.target, upstream_url: e.target.value.trim() } })} placeholder="https://your-server.example.com/mcp" className={`${input} font-mono text-xs`} />
+              <input value={draft.target.upstream_auth ?? ''} onChange={(e) => set({ target: { ...draft.target, upstream_auth: e.target.value } })} placeholder="Authorization header for it (optional)" className={`${input} mt-1 font-mono text-xs`} />
+              <label className="mt-2 flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={!!draft.target.forward_calls} onChange={(e) => set({ target: { ...draft.target, forward_calls: e.target.checked } })} /> Forward allowed calls to it for real (off = answer with the simulated responses; keep off unless the server is a sandbox)</label>
+            </>)}
             {draft.target.kind === 'http' && (<>
               <div className={`mt-2 ${label}`}>Endpoint (POST, JSON)</div>
               <input value={draft.target.url} onChange={(e) => set({ target: { ...draft.target, url: e.target.value.trim() } })} placeholder="http://127.0.0.1:9000/invoke" className={`${input} font-mono text-xs`} />
@@ -245,7 +294,7 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
                   <button onClick={() => mcp && navigator.clipboard?.writeText(mcp.url)} className="rounded border border-line px-2 py-1 text-muted hover:text-text">copy</button>
                   <button onClick={() => api.rotateMcp().then(setMcp)} className="rounded border border-line px-2 py-1 text-muted hover:text-fail" title="Invalidate the current URL">rotate</button>
                 </div>
-                <p className="mt-1 text-muted">Example agent: <code>backend/examples/external_agent.py</code> (Strands + this MCP URL, POST /invoke).</p>
+                <p className="mt-1 text-muted">{draft.target.kind === 'mcp_client' ? 'Then go to Rehearse → Live rehearsal: start a scenario, paste its prompt into your agent, stop.' : <>Example agent: <code>backend/examples/external_agent.py</code> (Strands + this MCP URL, POST /invoke).</>}</p>
               </div>
             )}
           </details>
@@ -266,16 +315,30 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
           <textarea value={rules} onChange={(e) => setRules(e.target.value)} rows={5} className={`${input} mt-1`} />
           <div className={`mt-3 ${label}`}>Parsed constraints (what gets enforced)</div>
           <ul className="mt-1 space-y-1.5">
-            {draft.constraints.map((c, i) => (
-              <li key={c.id} className="flex items-start gap-2 text-sm">
-                <code className="shrink-0 rounded bg-panel-2 px-1.5 py-0.5 text-xs text-accent">{c.tool}</code>
-                <span className="text-text">{KIND_TEXT[c.kind]?.(c) ?? c.kind}</span>
-                <span className="ml-auto shrink-0 font-mono text-[10px] text-muted">{c.id}</span>
-                <button onClick={() => set({ constraints: draft.constraints.filter((_, k) => k !== i) })} className="shrink-0 text-xs text-muted hover:text-fail">✕</button>
-              </li>
-            ))}
+            {draft.constraints.map((c, i) => {
+              const n = notes.find((x) => x.id === c.id)
+              return (
+                <li key={c.id} className="text-sm">
+                  <div className="flex items-start gap-2">
+                    <code className="shrink-0 rounded bg-panel-2 px-1.5 py-0.5 text-xs text-accent">{c.tool}</code>
+                    <span className="text-text">{KIND_TEXT[c.kind]?.(c) ?? c.kind}</span>
+                    {n && n.confidence < 0.8 && <span className="rounded bg-warn/15 px-1 py-0.5 font-mono text-[10px] text-warn" title="parser confidence">{Math.round(n.confidence * 100)}%</span>}
+                    <span className="ml-auto shrink-0 font-mono text-[10px] text-muted">{c.id}</span>
+                    <button onClick={() => set({ constraints: draft.constraints.filter((_, k) => k !== i) })} className="shrink-0 text-xs text-muted hover:text-fail">✕</button>
+                  </div>
+                  {c.rule && <div className="ml-1 text-[11px] text-muted">from “{c.rule}”</div>}
+                  {n?.ambiguity && <div className="ml-1 text-[11px] text-warn">assumed: {n.ambiguity}</div>}
+                </li>
+              )
+            })}
             {draft.constraints.length === 0 && <li className="text-xs text-warn">No constraints: every tool is denied by default. Parse the rules or load the example.</li>}
           </ul>
+          {problems.length > 0 && (
+            <div className="mt-3 rounded border border-warn/40 bg-warn/10 p-2.5 text-xs">
+              <div className="font-semibold text-warn">Checked against the tools and session facts</div>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-text">{problems.map((p, i) => <li key={i}>{p}</li>)}</ul>
+            </div>
+          )}
           <details className="mt-3">
             <summary className="cursor-pointer text-xs text-muted">Cedar policy these constraints compile to</summary>
             <pre className="mt-2 rounded bg-ink p-3 text-xs text-muted">{cedar}</pre>
@@ -308,6 +371,23 @@ export function Define({ spec, onSpec, cedar }: { spec: AgentSpec; onSpec: (s: A
           </div>
         )}
         <ul>{scenarios.map((s) => <ScenarioRow key={s.id} s={s} onRemove={() => removeScenario(s.id)} />)}</ul>
+        {coverage && coverage.rows.length > 0 && (
+          <details className="mt-3" open={coverage.rows.some((r) => r.gaps.length > 0)}>
+            <summary className="cursor-pointer text-xs text-muted">Coverage: which rule each scenario aims at ({coverage.with_expected_call} of {coverage.scenarios} state an expected call){coverage.rows.some((r) => r.gaps.length) ? <span className="text-warn"> · gaps</span> : <span className="text-pass"> · no gaps</span>}</summary>
+            <table className="mt-2 w-full text-[11px]">
+              <thead className="text-left uppercase tracking-wider text-muted"><tr><th className="pb-1 pr-2">Rule</th>{coverage.categories.map((c) => <th key={c} className="pb-1 pr-1 font-normal normal-case">{CATEGORY_LABEL[c] ?? c}</th>)}</tr></thead>
+              <tbody>
+                {coverage.rows.map((r) => (
+                  <tr key={r.id} className="border-t border-line">
+                    <td className="py-1 pr-2 font-mono text-accent">{r.id}</td>
+                    {coverage.categories.map((c) => <td key={c} className={`py-1 pr-1 font-mono ${r.counts[c] ? 'text-text' : r.gaps.includes(c) ? 'text-warn' : 'text-muted'}`}>{r.counts[c] || (r.gaps.includes(c) ? '·' : '')}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-1 text-[11px] text-muted">A dot is a gap: no scenario tests that rule with that tactic. Generate with Bedrock fills gaps; Escalate on the Rehearse tab finds what the agent resists.</p>
+          </details>
+        )}
       </Card>
       </div>
     </div>

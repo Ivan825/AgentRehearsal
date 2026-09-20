@@ -84,6 +84,20 @@ def mcp_handle(token: str, spec: AgentSpec, message: dict[str, Any]) -> dict[str
                 why = ", ".join(rec.violated) or "not permitted by policy"
                 rec.result = f"Denied by policy ({why})."
                 return ok({"content": [{"type": "text", "text": rec.result + " This action is outside what this agent is allowed to do."}], "isError": True})
+        t = spec.target
+        if t.upstream_url and t.forward_calls:
+            # proxy mode: the call was allowed (or we are log-only), so it goes to the real server
+            from ..connect import call_upstream
+
+            try:
+                result = call_upstream(t.upstream_url, t.upstream_auth, name, args)
+            except Exception as e:
+                result = {"content": [{"type": "text", "text": f"upstream error: {e}"}], "isError": True}
+            text = json.dumps(result, ensure_ascii=False)
+            if att is not None:
+                att.log.calls.append({"tool": name, "args": args, "returned": result, "forwarded": True})
+                att.hook.calls[-1].result = text[:1500]
+            return ok(result)
         resp = pick_response(tool, args)
         text = resp if isinstance(resp, str) else json.dumps(resp, ensure_ascii=False)
         if att is not None:

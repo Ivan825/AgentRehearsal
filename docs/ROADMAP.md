@@ -21,7 +21,7 @@ add features. Known ways a replay can still show a failure, and the fix for each
 Acceptance: every stored run in `backend/examples/runs/` and every held-out validation in the demo shows
 0 unsafe / all legitimate passing after enforcement, and the flaky count is 0 or explained.
 
-## 1. Fix your agent from the analysis
+## 1. Fix your agent from the analysis  — SHIPPED (Protect → "Fix the agent itself")
 
 The analysis already knows, per failure, the exact call, the arguments and the rule. That is enough to
 propose fixes at three layers and measure each one separately.
@@ -45,26 +45,21 @@ Effort: about two hours for 1a with the three-way comparison, one more for 1b an
 one author-model call for the rewrite, the runner takes a spec so a modified prompt is a `model_copy`,
 and the comparison view already handles before/after.
 
-## 2. Make Protect an analysis, not a viewer
+## 2. Make Protect an analysis, not a viewer — SHIPPED (explainer, over-blocking, diff, fix pack, uncovered findings)
 
 Today Protect maps failures to constraints and shows the Cedar. It should explain and propose.
 
 * **Plain-English explainer per constraint**: what it blocks, what it allows, which scenario ids it
   caught, rendered from the constraint itself so it never drifts from the Cedar.
-* **Uncovered findings**: failures whose exploited call matches no constraint, with a proposed constraint
-  (the agent emailed outside the domain and there is no email rule → propose `param_equals_session`).
-  One click adds it.
+* **Uncovered findings** — SHIPPED (tool-surface panel: denied calls no rule covers, with a one-click proposed constraint).
 * **Over-blocking detector**: legitimate scenarios denied by a constraint, with the argument that tripped
   it, so a wrong session key or an off-by-one limit is visible before replay.
 * **Diff on edit**: when the Cedar is edited by hand, show the diff and, after replay, which scenarios
   flipped because of it.
-* **Download / Copy**: the Cedar in local form and in AgentCore Gateway form (the CLI already renders it:
-  `agentrehearsal policy --agentcore-target`), plus the hook snippet.
-* **Gateway equivalence check**: a script that sends the same tool call to the local evaluator and to a
-  deployed AgentCore Gateway policy engine and prints both decisions, so "same policy text, same
-  decision" is verified rather than claimed (Path B in `infra/README.md`).
+* **Download / Copy** — SHIPPED as the fix pack (local Cedar, AgentCore form, hook snippet, hardened prompt, tool surface, evidence).
+* **Gateway equivalence check** — script SHIPPED (`scripts/gateway_equivalence.py`); needs a deployed Gateway (Path B in `infra/README.md`) to run for real.
 
-## 3. Better scenario authoring and rule parsing
+## 3. Better scenario authoring and rule parsing — SHIPPED except multi-turn and embedding de-dup
 
 * **Expected call per scenario**: the author states which tool and arguments an attack is meant to elicit.
   Enables rejecting off-target drafts, checking that a FAIL happened for the intended reason, and a
@@ -81,13 +76,19 @@ Today Protect maps failures to constraints and shows the Cedar. It should explai
 * **Multi-turn scenarios** and embedding-based de-duplication, after the above.
 * **Metrics**: cleaning-filter reject rate per author model, share of FAILs that matched the expected call.
 
-## 4. Connect an MCP server by URL
+## 4. Connect an MCP server by URL — SHIPPED (Define → Connect MCP server)
 
 Paste a URL, get a report. Fetch `tools/list` ourselves; have Bedrock draft simulated responses per tool
 from its schema (with one deliberately poisoned document); have Bedrock *suggest* rules from the tool
 descriptions for the user to confirm; then the normal loop. The real MCP server is read for its schema
 only and never called during a rehearsal: a rehearsal that issues real refunds is the problem we exist
 to prevent.
+
+## 4b. Be the MCP server — SHIPPED (target kind `mcp_client`, live sessions, upstream proxy with forwarding off by default)
+
+Next for it: a standing enforce mode outside sessions (today calls outside a live session are answered without judging), a
+per-session transcript capture from agents that support it, and recorded demo runs of goose and Claude Code against the
+filesystem MCP server.
 
 ## 5. Platform
 

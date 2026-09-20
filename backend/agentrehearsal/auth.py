@@ -84,10 +84,11 @@ def current_user(request: Request) -> dict[str, Any]:
     if not AUTH_ENABLED:
         return ANON
     header = request.headers.get("authorization", "")
-    if not header.lower().startswith("bearer "):
+    token = header[7:] if header.lower().startswith("bearer ") else request.query_params.get("token", "")   # ?token= for download links
+    if not token:
         raise HTTPException(401, "Sign in to continue.")
     try:
-        claims = jwt.decode(header[7:], _secret(), algorithms=["HS256"])
+        claims = jwt.decode(token, _secret(), algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Your session expired. Sign in again.")
     except jwt.InvalidTokenError:

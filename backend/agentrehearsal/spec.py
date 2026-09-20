@@ -74,15 +74,24 @@ class TargetConfig(BaseModel):
                        reads the reply. The agent must take its tools from the workspace's MCP endpoint so every
                        call passes through the policy.
     agentcore_runtime  Same, for an agent deployed on Amazon Bedrock AgentCore Runtime (`agent_arn`).
+    mcp_client         The agent is an MCP client you drive yourself (goose, Cline, Claude Code, OpenHands...). It
+                       connects to the workspace MCP URL; AgentRehearsal proxies to `upstream_url`, records every
+                       call and applies the policy. Scenarios are run as live sessions (Rehearse → Live).
     """
 
-    kind: Literal["simulated", "http", "agentcore_runtime"] = "simulated"
+    kind: Literal["simulated", "http", "agentcore_runtime", "mcp_client"] = "simulated"
     url: str = ""
     auth_header: str = ""          # sent as the Authorization header to `url`, e.g. "Bearer …"
     prompt_field: str = "prompt"   # JSON field carrying the scenario text
     response_field: str = ""       # dotted path to the reply text; auto-detected when empty
     agent_arn: str = ""
     token: str = ""                # set by the API at run time: identifies the workspace's MCP endpoint
+    # mcp_client: the agent (goose, Cline, Claude Code, OpenHands, anything that speaks MCP) connects to the
+    # workspace's MCP URL itself; one line in its mcp.json. AgentRehearsal sits between the agent and its real
+    # MCP server: every call is recorded and judged; log-only forwards, enforce refuses. No adapter, no fork.
+    upstream_url: str = ""         # the real MCP server behind the proxy (schema read from it; calls forwarded only when forward_calls)
+    upstream_auth: str = ""        # Authorization header for the upstream
+    forward_calls: bool = False    # False = answer with the simulated responses even in proxy mode (safe default)
 
 
 class AgentSpec(BaseModel):

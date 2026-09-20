@@ -8,6 +8,22 @@ export function LiveRun({ job }: { job: Job }) {
   const byId = new Map<string, Job['progress']>()
   for (const p of job.progress) byId.set(p.scenario_id, [...(byId.get(p.scenario_id) ?? []), p])
   const enforce = job.mode === 'enforce'
+  if ((job.kind === 'escalate' || job.kind === 'draft') && job.phase !== 'rehearse') {
+    return (
+      <Card title={job.kind === 'draft' ? 'Drafting the simulated world and rules from your tools' : `Escalating · round ${job.round ?? 1} · writing harder variants of the attacks the agent resisted`} right={<span className="text-xs text-muted">author model · Bedrock</span>}>
+        <div className="mb-3 h-1.5 w-full overflow-hidden rounded bg-panel-2"><div className="h-full w-1/3 animate-pulse bg-accent" /></div>
+        <p className="text-sm text-muted">{job.kind === 'draft' ? 'Canned responses per tool, one document with an embedded instruction, session facts, suggested rules; then the rules are parsed into constraints.' : 'Each variant keeps the same target call and category but changes the tactic and the premise. Then they run, and whatever the agent still resists is escalated again.'}</p>
+      </Card>
+    )
+  }
+  if (job.kind === 'harden' && job.phase === 'authoring') {
+    return (
+      <Card title="Rewriting the system prompt from the findings" right={<span className="text-xs text-muted">author model · Bedrock</span>}>
+        <div className="mb-3 h-1.5 w-full overflow-hidden rounded bg-panel-2"><div className="h-full w-1/3 animate-pulse bg-accent" /></div>
+        <p className="text-sm text-muted">Then the same scenarios run again with the new prompt and no policy, so you can see what the prompt alone buys.</p>
+      </Card>
+    )
+  }
   if (job.kind === 'validate' && job.phase === 'authoring') {
     return (
       <Card title="Authoring held-out scenarios" right={<span className="text-xs text-muted">author model · Bedrock</span>}>
@@ -18,6 +34,8 @@ export function LiveRun({ job }: { job: Job }) {
   }
   const heading = job.kind === 'validate'
     ? (enforce ? 'Held-out set · policy ENFORCED (2 of 2)' : 'Held-out set · policy LOG-ONLY (1 of 2)')
+    : job.kind === 'harden' ? 'Hardened prompt · policy LOG-ONLY'
+    : job.kind === 'escalate' ? `Escalation round ${job.round ?? 1} · harder variants, policy LOG-ONLY`
     : (enforce ? 'Replaying with policy ENFORCED' : 'Rehearsing with policy LOG-ONLY')
   return (
     <Card

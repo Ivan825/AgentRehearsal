@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, session } from './api'
-import type { AgentSpec, Comparison, Job, Run, RunListItem, ScenarioResult } from './types'
+import type { AgentSpec, Comparison, Constraint, Job, Run, RunListItem, Scenario, ScenarioResult } from './types'
 import { Define } from './components/Define'
 import { Scorecard } from './components/Scorecard'
 import { Trace } from './components/Trace'
-import { Protect } from './components/Protect'
+import { Protect, type Hardened } from './components/Protect'
 import { Replay } from './components/Replay'
 import { LiveRun } from './components/LiveRun'
 import { Landing } from './components/Landing'
+import { Live } from './components/Live'
 import { Button, Card } from './components/ui'
 import { Logo, useTheme } from './site/Shell'
 
@@ -25,6 +26,7 @@ export default function App() {
   const [stage, setStage] = useState<Stage>('define')
   const [spec, setSpec] = useState<AgentSpec | null>(null)
   const [cedar, setCedar] = useState('')
+  const [compiledCedar, setCompiledCedar] = useState('')
   const [model, setModel] = useState<'bedrock' | 'scripted'>('bedrock')
   const [modelId, setModelId] = useState<string>(() => { try { return localStorage.getItem('ar-model') || '' } catch { return '' } })
   useEffect(() => { try { localStorage.setItem('ar-model', modelId) } catch { /* ignore */ } }, [modelId])
@@ -33,6 +35,9 @@ export default function App() {
   const [after, setAfter] = useState<Run | null>(null)
   const [cmp, setCmp] = useState<Comparison | null>(null)
   const [holdout, setHoldout] = useState<Comparison | null>(null)
+  const [hardened, setHardened] = useState<Hardened | null>(null)
+  const [liveScenarios, setLiveScenarios] = useState<Scenario[]>([])
+  const [escalated, setEscalated] = useState<{ rounds: { round: number; run_id: string; tried: number; found: number }[]; found: number; added: number } | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const [selected, setSelected] = useState<ScenarioResult | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -45,8 +50,9 @@ export default function App() {
 
   useEffect(() => {
     api.spec().then(setSpec).catch((e) => setErr(String(e)))
-    api.policy().then((p) => setCedar(p.cedar)).catch(() => {})
+    api.policy().then((p) => { setCedar(p.cedar); setCompiledCedar(p.cedar) }).catch(() => {})
     api.models().then((m) => setModelId((cur) => cur || m.default)).catch(() => {})
+    api.scenarios().then((r) => setLiveScenarios(r.scenarios)).catch(() => {})
     refreshRuns()
   }, [refreshRuns])
 
@@ -73,7 +79,7 @@ export default function App() {
   }
 
   async function rehearse() {
-    setErr(null); setAfter(null); setCmp(null); setHoldout(null); setSelected(null)
+    setErr(null); setAfter(null); setCmp(null); setHoldout(null); setHardened(null); setEscalated(null); setSelected(null)
     try {
       const j = await api.startRun({ mode: 'rehearse', model, model_id: chosenModel(), attack_runs: 3, workers: 1 })
       setStage('rehearse')
@@ -104,6 +110,45 @@ export default function App() {
     } catch (e) { setErr(String(e)) }
   }
 
+  async function harden() {
+    if (!before) return
+    setErr(null)
+    try {
+      const j = await api.harden({ base_run_id: before.run_id, model, model_id: chosenModel(), attack_runs: 3 })
+      setStage('protect')
+      watch(j, async (r, done) => {
+        const res = done.result as { system_prompt: string; changes: string[] } | undefined
+        if (res) setHardened({ system_prompt: res.system_prompt, changes: res.changes, run: r })
+      })
+    } catch (e) { setErr(String(e)) }
+  }
+
+  async function escalate() {
+    if (!before) return
+    setErr(null)
+    try {
+      const j = await api.escalate({ base_run_id: before.run_id, rounds: 2, model, model_id: chosenModel(), attack_runs: 1 })
+      setStage('rehearse')
+      watch(j, async (_r, done) => {
+        const res = done.result as { rounds: { round: number; run_id: string; tried: number; found: number }[]; found: number; added: number } | undefined
+        if (res) setErr(null)
+        if (res) setEscalated(res)
+      })
+    } catch (e) { setErr(String(e)) }
+  }
+
+  async function applyPrompt(system_prompt: string) {
+    try { setSpec(await api.applyPrompt(system_prompt)) } catch (e) { setErr(String(e)) }
+  }
+
+  async function addConstraint(c: Constraint) {
+    if (!spec) return
+    try {
+      const next = await api.saveSpec({ ...spec, constraints: [...spec.constraints.filter((x) => x.id !== c.id), c] })
+      setSpec(next); const p = await api.policy(); setCedar(p.cedar); setCompiledCedar(p.cedar)
+    } catch (e) { setErr(String(e)) }
+  }
+
   async function loadRun(id: string) {
     const r = await api.run(id)
     setSelected(null); setErr(null)
@@ -128,13 +173,15 @@ export default function App() {
   const running = job?.status === 'running'
   const shownRun = stage === 'replay' && after ? after : before
   const hasConstraints = (spec?.constraints.length ?? 0) > 0
-  const done: Record<Stage, boolean> = { define: hasConstraints, rehearse: !!before, diagnose: !!before, protect: !!after, replay: !!holdout }
+  const done: Record<Stage, boolean> = { define: hasConstraints, rehearse: !!before, diagnose: !!before, protect: !!after || !!hardened, replay: !!holdout }
 
   // the one thing to do next, so a first-time user is never guessing
   const next = !hasConstraints
     ? { text: 'Define the agent: load an example or parse your own rules into constraints.', action: () => setStage('define'), label: 'Open Define' }
     : !before
-      ? { text: `Rehearse: run every scenario on the Define tab (seeds plus anything Bedrock authored) against ${spec?.name ?? 'the agent'} with the policy in log-only mode.`, action: rehearse, label: '▶ Run Rehearsal' }
+      ? (spec?.target?.kind === 'mcp_client'
+        ? { text: `Live rehearsal: connect ${spec.name} to the workspace MCP URL, then run scenarios one at a time by pasting their prompts into it.`, action: () => setStage('rehearse'), label: '▶ Live rehearsal' }
+        : { text: `Rehearse: run every scenario on the Define tab (seeds plus anything Bedrock authored) against ${spec?.name ?? 'the agent'} with the policy in log-only mode.`, action: rehearse, label: '▶ Run Rehearsal' })
       : !after
         ? { text: `${before.summary.attacks_unsafe} of ${before.summary.attacks_total} attacks got through. Protect compiles the findings into a Cedar policy; replay proves it blocks them.`, action: () => setStage('protect'), label: 'Open Protect' }
         : !holdout
@@ -170,7 +217,7 @@ export default function App() {
             <label className="flex items-center gap-1.5 rounded border border-line px-2 py-1.5 text-xs text-muted" title="Offline simulation of a naive agent (no AWS). Models the SupportBot example only.">
               <input type="checkbox" checked={model === 'scripted'} onChange={(e) => setModel(e.target.checked ? 'scripted' : 'bedrock')} /> offline sim
             </label>
-            <Button onClick={rehearse} disabled={running || !spec}>{running && job?.kind === 'run' && job?.mode === 'rehearse' ? 'Rehearsing…' : '▶ Run Rehearsal'}</Button>
+            <Button onClick={spec?.target?.kind === 'mcp_client' ? () => setStage('rehearse') : rehearse} disabled={running || !spec}>{running && job?.kind === 'run' && job?.mode === 'rehearse' ? 'Rehearsing…' : spec?.target?.kind === 'mcp_client' ? '▶ Live rehearsal' : '▶ Run Rehearsal'}</Button>
           </div>
         </div>
       </header>
@@ -187,9 +234,17 @@ export default function App() {
         {err && <div className="rounded border border-fail/40 bg-fail/10 p-3 text-sm text-fail">{err}</div>}
         {running && job && <LiveRun job={job} />}
 
-        {stage === 'define' && spec && <Define spec={spec} onSpec={(s) => { setSpec(s); api.policy().then((p) => setCedar(p.cedar)) }} cedar={cedar} />}
+        {stage === 'define' && spec && <Define spec={spec} onSpec={(s) => { setSpec(s); api.policy().then((p) => { setCedar(p.cedar); setCompiledCedar(p.cedar) }); api.scenarios().then((r) => setLiveScenarios(r.scenarios)).catch(() => {}) }} cedar={cedar} />}
 
-        {stage === 'rehearse' && (before ? <Scorecard run={before} onOpen={(s) => { setSelected(s); setStage('diagnose') }} /> : !running && (
+        {stage === 'rehearse' && escalated && !running && (
+          <div className="rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm">
+            <span className="font-semibold">Escalation done:</span> {escalated.added} harder variant{escalated.added === 1 ? '' : 's'} tried over {escalated.rounds.length} round{escalated.rounds.length === 1 ? '' : 's'}, {escalated.found} got through{escalated.found ? ' — they are in the scenario list now; run the rehearsal again to fold them into the findings' : ' — the agent held on every variant'}.
+            {escalated.rounds.map((r) => <span key={r.round} className="ml-2 font-mono text-xs text-muted">round {r.round}: {r.found}/{r.tried}</span>)}
+          </div>
+        )}
+        {stage === 'rehearse' && spec?.target?.kind === 'mcp_client' && !running && <Live scenarios={liveScenarios} cedar={cedar} before={before} onRun={loadRun} />}
+        {stage === 'rehearse' && spec?.target?.kind === 'mcp_client' && !running && before && <Scorecard run={before} onOpen={(s) => { setSelected(s); setStage('diagnose') }} />}
+        {stage === 'rehearse' && spec?.target?.kind !== 'mcp_client' && (before ? <Scorecard run={before} onOpen={(s) => { setSelected(s); setStage('diagnose') }} onEscalate={escalate} busy={running} /> : !running && (
           <Landing agent={spec?.name ?? 'the agent'} onRun={rehearse} runs={runs} onLoad={loadRun} />
         ))}
 
@@ -197,7 +252,7 @@ export default function App() {
           <Card title="Diagnose"><p className="text-sm text-muted">Pick a scenario from a scorecard to see its full reasoning path: the prompt, every tool call with its arguments, the policy decision and the rule behind it.</p></Card>
         ))}
 
-        {stage === 'protect' && <Protect run={before} cedar={cedar} onCedar={setCedar} onReplay={replay} busy={running} />}
+        {stage === 'protect' && <Protect run={before} after={after} cedar={cedar} compiledCedar={compiledCedar} onCedar={setCedar} onReplay={replay} busy={running} hardened={hardened} onHarden={harden} onApplyPrompt={applyPrompt} onAddConstraint={addConstraint} />}
 
         {stage === 'replay' && (after ? (
           <div className="space-y-4">
@@ -222,6 +277,7 @@ function RunList({ runs, onLoad }: { runs: RunListItem[]; onLoad: (id: string) =
           <span className="font-mono text-muted">{r.run_id}</span>
           <span className={`rounded px-1.5 py-0.5 font-mono ${r.mode === 'enforce' ? 'bg-pass/15 text-pass' : 'bg-warn/15 text-warn'}`}>{r.mode}</span>
           {r.holdout && <span className="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] text-accent">held-out</span>}
+          {r.variant === 'hardened_prompt' && <span className="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] text-accent">hardened prompt</span>}
           <span className="text-muted">{r.model}</span>
           <span className="ml-auto font-mono">{r.summary.pass}/{r.summary.total} pass</span>
           {r.example && <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[10px] text-muted">example</span>}

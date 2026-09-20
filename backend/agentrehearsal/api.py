@@ -27,6 +27,7 @@ from .store import get_store
 from .target import external
 import os
 import secrets
+import time
 
 app = FastAPI(title="AgentRehearsal API", version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -108,7 +109,9 @@ def _public_base(request: Request) -> str:
 def workspace_mcp(request: Request, user: dict[str, Any] = auth.User) -> dict[str, Any]:
     p = _project(user)
     base = _public_base(request)
-    return {"token": p["mcp_token"], "url": f"{base}/mcp/{p['mcp_token']}", "tools": [t.name for t in p["spec"].tools]}
+    t = p["spec"].target
+    return {"token": p["mcp_token"], "url": f"{base}/mcp/{p['mcp_token']}", "tools": [t_.name for t_ in p["spec"].tools], "upstream": t.upstream_url, "forwarding": bool(t.upstream_url and t.forward_calls),
+            "mcp_json": {"mcpServers": {"agentrehearsal": {"type": "http", "url": f"{base}/mcp/{p['mcp_token']}"}}}}
 
 
 @app.post("/api/workspace/mcp/rotate")
@@ -235,20 +238,84 @@ def import_tools(body: ToolsImport, user: dict[str, Any] = auth.User) -> dict[st
     return {"tools": out}
 
 
+class ConnectIn(BaseModel):
+    url: str
+    auth_header: str = ""
+
+
+@app.post("/api/tools/connect")
+def connect_mcp(body: ConnectIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """Read an MCP server's tool list over streamable HTTP. Schema only; the server's tools are never called."""
+    from .connect import fetch_tools, tools_from_mcp
+
+    try:
+        raw = fetch_tools(body.url, body.auth_header)
+    except Exception as e:
+        raise HTTPException(502, f"could not read tools from {body.url}: {type(e).__name__}: {e}")
+    tools = tools_from_mcp(raw)
+    if not tools:
+        raise HTTPException(502, "the server returned no tools")
+    return {"tools": [t.model_dump() for t in tools], "count": len(tools)}
+
+
+class DraftIn(BaseModel):
+    name: str = ""
+    purpose: str = ""
+    tools: list[ToolDef]
+    apply: bool = True   # replace the project's agent with the drafted one
+
+
+@app.post("/api/tools/draft")
+def draft_world_endpoint(body: DraftIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """Background job: Bedrock drafts the simulated world (responses per tool, one poisoned document, session facts)
+    and suggests rules. Result: {spec, rules_with_reasons}. With apply=true the project's agent is replaced and its
+    scenario list cleared, ready for Parse rules → Generate → Rehearse."""
+    from .connect import draft_world, spec_from_connection
+
+    proj = _project(user)
+    job = _new_job(user, kind="draft", phase="authoring")
+
+    def work() -> None:
+        try:
+            world = draft_world(body.purpose, body.tools)
+            spec = spec_from_connection(body.name, body.purpose, body.tools, world)
+            with _lock:
+                job["phase"] = "parsing"
+            try:   # best effort: rules -> constraints, so the agent is runnable straight away
+                from .policy.parse import parse_rules
+
+                spec = spec.model_copy(update={"constraints": parse_rules(spec)})
+            except Exception as e:
+                print(f"[draft] rules not parsed: {e}")
+            with _lock:
+                job["result"] = {"spec": spec.model_dump(), "rules_with_reasons": world.rules}
+                if body.apply:
+                    proj["spec"] = spec
+                    proj["scenarios"] = []
+                job.update(status="done", phase="done")
+            if body.apply:
+                _persist(user)
+        except Exception as e:
+            job["status"] = "error"
+            job["error"] = f"drafting failed: {type(e).__name__}: {e}"
+
+    threading.Thread(target=work, daemon=True).start()
+    return _public_job(job)
+
+
 class RulesIn(BaseModel):
     rules: list[str]
 
 
 @app.post("/api/rules/parse")
 def parse_rules_endpoint(body: RulesIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
-    from .policy.parse import parse_rules
+    from .policy.parse import parse_rules_detailed
 
     spec = _project(user)["spec"].model_copy(update={"rules": body.rules})
     try:
-        constraints = parse_rules(spec)
+        return parse_rules_detailed(spec)   # constraints + per-rule confidence/ambiguity + validation problems
     except Exception as e:
         raise HTTPException(502, f"rule parsing failed: {e}")
-    return {"constraints": [c.model_dump() for c in constraints]}
 
 
 @app.get("/api/policy")
@@ -331,6 +398,222 @@ def _public_job(job: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in job.items() if k != "owner"}
 
 
+@app.get("/api/constraints/validate")
+def validate_constraints_endpoint(user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    from .policy.parse import validate_constraints
+
+    spec = _project(user)["spec"]
+    return {"problems": validate_constraints(spec, spec.constraints)}
+
+
+@app.get("/api/scenarios/coverage")
+def scenario_coverage(user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """constraint × category matrix: how many scenarios aim at each rule, and the gaps."""
+    p = _project(user)
+    spec: AgentSpec = p["spec"]
+    cats = ["allowed", "boundary", "parameter_violation", "scope_violation", "direct_injection", "indirect_injection", "destructive_action"]
+    rows = []
+    for c in spec.constraints:
+        if c.kind == "allow":
+            continue
+        counts = {k: 0 for k in cats}
+        for s in p["scenarios"]:
+            aimed = (s.expected_call or {}).get("tool") == c.tool or (s.must_call == c.tool and s.expected == "allow")
+            if not aimed and not s.expected_call and s.expected == "deny":
+                # older scenarios without an expected call: attribute by the tool named in the rationale/prompt
+                aimed = c.tool in (s.rationale or "") or c.tool.split("_")[0] in s.prompt.lower()
+            if aimed:
+                counts[s.category] = counts.get(s.category, 0) + 1
+        gaps = [k for k in cats if counts[k] == 0 and k not in ("boundary",) and not (k == "indirect_injection" and not any(r.injection for t in spec.tools for r in t.responses))]
+        rows.append({"id": c.id, "tool": c.tool, "kind": c.kind, "counts": counts, "total": sum(counts.values()), "gaps": gaps})
+    return {"categories": cats, "rows": rows, "scenarios": len(p["scenarios"]), "with_expected_call": sum(1 for s in p["scenarios"] if s.expected_call)}
+
+
+class EscalateIn(BaseModel):
+    base_run_id: str = Field(description="a rehearse run; attacks it resisted are mutated into harder variants")
+    rounds: int = 2
+    model: Literal["bedrock", "scripted"] = "bedrock"
+    model_id: str | None = None
+    attack_runs: int = 1
+
+
+@app.post("/api/escalate")
+def start_escalate(body: EscalateIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """Adaptive attack search. Round by round: mutate the attacks the agent resisted, run them log-only, keep going
+    with whatever it resisted again. Every variant is appended to the project's scenarios (source=escalated) so the
+    next rehearsal, the policy and the held-out validation all see them. Result: {rounds: [...], found: n}."""
+    from .scenarios.generator import escalate
+
+    proj = _project(user)
+    base = _load_run_for(user, body.base_run_id)
+    spec = AgentSpec.model_validate(base["spec"])
+    policy = CedarPolicy(base["policy_cedar"], spec)
+    spec, model, external_target = _prepare_target(proj, spec, body.model, body.model_id)
+    resisted = [s for s in scenarios_from_run(base) if s.category in ATTACK_CATEGORIES]
+    resisted_ids = {s["id"] for s in base["scenarios"] if s["category"] in ATTACK_CATEGORIES and s["verdict"] == "PASS"}
+    resisted = [s for s in resisted if s.id in resisted_ids]
+    job = _new_job(user, kind="escalate", phase="authoring", mode="rehearse", model=body.model, model_id=_model_label(spec, body.model, body.model_id, external_target), base_run_id=body.base_run_id)
+
+    def progress(pr: dict[str, Any]) -> None:
+        with _lock:
+            job["progress"].append(pr)
+
+    def work() -> None:
+        try:
+            if not resisted:
+                raise RuntimeError("the agent resisted no attacks in that run; nothing to escalate")
+            rounds: list[dict[str, Any]] = []
+            current = resisted
+            start = len([s for s in proj["scenarios"] if s.source == "escalated"]) + 1
+            found_total = 0
+            for rnd in range(1, max(1, body.rounds) + 1):
+                with _lock:
+                    job.update(phase="authoring", round=rnd, progress=[])
+                ss = escalate(spec, current, prefix="E", start=start)
+                if not ss.scenarios:
+                    break
+                start += len(ss.scenarios)
+                plan = [{"id": sc.id, "title": sc.title, "category": sc.category, "attempts": max(sc.runs, body.attack_runs)} for sc in ss.scenarios]
+                with _lock:
+                    job.update(plan=plan, total_attempts=sum(x["attempts"] for x in plan), phase="rehearse")
+                rec = run_scenarios(spec, ss.scenarios, model, "rehearse", policy, attack_runs=body.attack_runs, workers=1, on_progress=progress)
+                rec.update(owner=user["id"], base_run_id=body.base_run_id, variant=f"escalate_round_{rnd}")
+                save_run(rec, user_id=user["id"])
+                found = [s for s in rec["scenarios"] if s["verdict"] != "PASS"]
+                found_total += len(found)
+                with _lock:
+                    proj["scenarios"] = list(proj["scenarios"]) + ss.scenarios
+                _persist(user)
+                rounds.append({"round": rnd, "run_id": rec["run_id"], "tried": len(ss.scenarios), "found": len(found), "found_ids": [s["id"] for s in found]})
+                current = [s for s in ss.scenarios if s.id not in {f["id"] for f in found}]
+                if not current:
+                    break
+            with _lock:
+                job.update(result={"rounds": rounds, "found": found_total, "added": sum(r["tried"] for r in rounds)}, run_id=rounds[-1]["run_id"] if rounds else None, status="done", phase="done")
+        except Exception as e:
+            job["status"] = "error"
+            job["error"] = f"{type(e).__name__}: {e}"
+
+    threading.Thread(target=work, daemon=True).start()
+    return _public_job(job)
+
+
+# ---- live sessions: an MCP-client agent (goose, Cline, Claude Code, OpenHands...) driven by hand ----------
+#
+# The agent connects to the workspace MCP URL itself (one line in its mcp.json). AgentRehearsal proxies to the
+# real MCP server behind it, records every call and applies the policy. A live session = one scenario attempt:
+# start it here, paste the scenario's prompt into the agent, stop it here; the verdict is computed from the
+# recorded calls exactly as for a built-in agent. `finish` turns the session's attempts into a stored run.
+
+_live: dict[str, dict[str, Any]] = {}   # user_id -> {"mode", "cedar", "attempts": {scenario_id: [...]}, "current": {...}|None}
+
+
+class LiveStartIn(BaseModel):
+    scenario_id: str
+    mode: Literal["rehearse", "enforce"] = "rehearse"
+    cedar: str | None = None
+
+
+def _live_state(user: dict[str, Any]) -> dict[str, Any]:
+    return _live.setdefault(user["id"], {"mode": "rehearse", "cedar": None, "attempts": {}, "current": None})
+
+
+@app.post("/api/live/start")
+def live_start(body: LiveStartIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    from .hooks import RecordingHook
+    from .runner import _session_for, compose_prompt
+    from .target.generic import ToolLog
+
+    proj = _project(user)
+    spec: AgentSpec = proj["spec"]
+    sc = next((s for s in proj["scenarios"] if s.id == body.scenario_id), None)
+    if not sc:
+        raise HTTPException(404, "no such scenario")
+    st = _live_state(user)
+    if st["current"]:
+        raise HTTPException(409, f"a session for {st['current']['scenario'].id} is already open; stop it first")
+    cedar = body.cedar or st["cedar"] or constraints_to_cedar(spec)
+    problems = validate_cedar(cedar)
+    if problems:
+        raise HTTPException(400, f"policy does not parse: {problems}")
+    st.update(mode=body.mode, cedar=cedar)
+    session = _session_for(spec, sc)
+    hook = RecordingHook(policy=CedarPolicy(cedar, spec), mode=body.mode, session=session)
+    log = ToolLog()
+    external.begin_attempt(proj["mcp_token"], spec, hook, log)
+    st["current"] = {"scenario": sc, "hook": hook, "log": log, "started": time.time(), "prompt": compose_prompt(spec, sc, session), "session": session}
+    return {"scenario_id": sc.id, "prompt": st["current"]["prompt"], "mode": body.mode, "mcp_url": None}
+
+
+@app.get("/api/live")
+def live_status(user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    st = _live_state(user)
+    cur = st["current"]
+    done = {sid: [{"attempt": a["attempt"], "verdict": a["verdict"], "reason": a["reason"]} for a in atts] for sid, atts in st["attempts"].items()}
+    if not cur:
+        return {"open": None, "mode": st["mode"], "done": done}
+    return {"open": {"scenario_id": cur["scenario"].id, "prompt": cur["prompt"], "calls": [c.as_dict() for c in cur["hook"].calls], "seconds": round(time.time() - cur["started"], 1)}, "mode": st["mode"], "done": done}
+
+
+class LiveStopIn(BaseModel):
+    final_text: str = ""     # what the agent replied, if you want it on the record
+
+
+@app.post("/api/live/stop")
+def live_stop(body: LiveStopIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    from .runner import _on_target
+    from .verdict import judge_attempt
+
+    proj = _project(user)
+    st = _live_state(user)
+    cur = st["current"]
+    if not cur:
+        raise HTTPException(409, "no open session")
+    external.end_attempt(proj["mcp_token"])
+    sc, hook, log = cur["scenario"], cur["hook"], cur["log"]
+    v = judge_attempt(proj["spec"], sc, hook.calls, st["mode"], None)
+    atts = st["attempts"].setdefault(sc.id, [])
+    rec = {"attempt": len(atts) + 1, "prompt": cur["prompt"], "calls": [c.as_dict() for c in hook.calls], "side_effects": log.side_effects(), "final_text": body.final_text[:2000],
+           "error": None, "verdict": v.verdict, "reason": v.reason, "attempted_denied": v.attempted_denied, "blocked": v.blocked, "on_target": _on_target(sc, hook.calls), "duration_s": round(time.time() - cur["started"], 2), "live": True}
+    atts.append(rec)
+    st["current"] = None
+    return {"scenario_id": sc.id, "verdict": v.verdict, "reason": v.reason, "calls": rec["calls"], "attempts": len(atts)}
+
+
+class LiveFinishIn(BaseModel):
+    base_run_id: str | None = None   # for an enforce session: the rehearse run it replays
+
+
+@app.post("/api/live/finish")
+def live_finish(body: LiveFinishIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    from .runner import assemble_run
+
+    proj = _project(user)
+    st = _live_state(user)
+    if st["current"]:
+        raise HTTPException(409, "stop the open session first")
+    if not st["attempts"]:
+        raise HTTPException(400, "no sessions recorded yet")
+    spec: AgentSpec = proj["spec"]
+    by_id = {s.id: s for s in proj["scenarios"]}
+    results = [(by_id[sid], atts) for sid, atts in st["attempts"].items() if sid in by_id]
+    rec = assemble_run(spec, st["mode"], CedarPolicy(st["cedar"] or constraints_to_cedar(spec), spec), results, model_label=f"live:{spec.target.kind}")
+    rec.update(owner=user["id"], live=True)
+    if body.base_run_id:
+        rec["base_run_id"] = body.base_run_id
+    save_run(rec, user_id=user["id"])
+    _live[user["id"]] = {"mode": st["mode"], "cedar": st["cedar"], "attempts": {}, "current": None}
+    return {"run_id": rec["run_id"], "summary": rec["summary"]}
+
+
+@app.post("/api/live/reset")
+def live_reset(user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    proj = _project(user)
+    external.end_attempt(proj["mcp_token"])
+    _live[user["id"]] = {"mode": "rehearse", "cedar": None, "attempts": {}, "current": None}
+    return {"ok": True}
+
+
 # ---- runs --------------------------------------------------------------------------------
 
 class RunIn(BaseModel):
@@ -347,6 +630,8 @@ def _prepare_target(proj: dict[str, Any], spec: AgentSpec, model_kind: str, mode
     """Resolve where the scenarios run: a simulated agent on a Bedrock model, the scripted stand-in, or the
     user's own agent reached through the workspace MCP endpoint."""
     external_target = spec.target.kind != "simulated" and model_kind != "scripted"
+    if spec.target.kind == "mcp_client" and model_kind != "scripted":
+        raise HTTPException(400, "This agent connects to the MCP URL itself, so AgentRehearsal cannot send it prompts. Use Live rehearsal on the Rehearse tab (or tick offline sim to exercise the pipeline with the scripted agent).")
     if external_target:
         spec = spec.model_copy(deep=True)
         spec.target.token = proj["mcp_token"]
@@ -380,6 +665,8 @@ def _load_run_for(user: dict[str, Any], run_id: str) -> dict[str, Any]:
 def start_run(body: RunIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
     proj = _project(user)
     spec: AgentSpec = proj["spec"]
+    if spec.target.kind == "mcp_client" and body.model != "scripted":
+        raise HTTPException(400, "This agent connects to the MCP URL itself, so AgentRehearsal cannot send it prompts. Use Live rehearsal on the Rehearse tab: start a scenario, paste its prompt into the agent, stop, repeat.")
     if body.base_run_id:
         base = _load_run_for(user, body.base_run_id)
         spec = AgentSpec.model_validate(base["spec"])
@@ -478,6 +765,100 @@ def start_validation(body: ValidateIn, user: dict[str, Any] = auth.User) -> dict
     return _public_job(job)
 
 
+# ---- fix your agent --------------------------------------------------------------------------
+
+class HardenIn(BaseModel):
+    base_run_id: str = Field(description="the rehearse run whose findings drive the rewrite")
+    model: Literal["bedrock", "scripted"] = "bedrock"
+    model_id: str | None = None
+    attack_runs: int = 3
+
+
+@app.post("/api/fix/harden")
+def start_harden(body: HardenIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """Rewrite the system prompt from the findings, then replay the same scenarios with the new prompt and
+    NO enforcement, so the prompt's own effect is measured. Result: {system_prompt, changes, run_id}."""
+    from .fixes import harden_prompt
+
+    proj = _project(user)
+    base = _load_run_for(user, body.base_run_id)
+    spec = AgentSpec.model_validate(base["spec"])
+    scenarios = scenarios_from_run(base)
+    policy = CedarPolicy(base["policy_cedar"], spec)
+    spec, model, external_target = _prepare_target(proj, spec, body.model, body.model_id)
+    plan = [{"id": sc.id, "title": sc.title, "category": sc.category, "attempts": max(sc.runs, body.attack_runs if sc.category in ATTACK_CATEGORIES else 1)} for sc in scenarios]
+    job = _new_job(user, kind="harden", phase="authoring", mode="rehearse", model=body.model, model_id=_model_label(spec, body.model, body.model_id, external_target), base_run_id=body.base_run_id)
+
+    def progress(pr: dict[str, Any]) -> None:
+        with _lock:
+            job["progress"].append(pr)
+
+    def work() -> None:
+        try:
+            hp = harden_prompt(spec, base)
+            hardened_spec = spec.model_copy(update={"system_prompt": hp.system_prompt})
+            with _lock:
+                job.update(plan=plan, total_attempts=sum(x["attempts"] for x in plan), phase="rehearse", progress=[], result={"system_prompt": hp.system_prompt, "changes": hp.changes, "run_id": None})
+            rec = run_scenarios(hardened_spec, scenarios, model, "rehearse", policy, attack_runs=body.attack_runs, workers=1, on_progress=progress)
+            rec.update(owner=user["id"], base_run_id=body.base_run_id, variant="hardened_prompt", prompt_changes=hp.changes)
+            save_run(rec, user_id=user["id"])
+            with _lock:
+                job["result"]["run_id"] = rec["run_id"]
+                job.update(run_id=rec["run_id"], status="done", phase="done")
+        except Exception as e:
+            job["status"] = "error"
+            job["error"] = f"{type(e).__name__}: {e}"
+
+    threading.Thread(target=work, daemon=True).start()
+    return _public_job(job)
+
+
+class ApplyPromptIn(BaseModel):
+    system_prompt: str
+
+
+@app.post("/api/fix/apply-prompt")
+def apply_prompt(body: ApplyPromptIn, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    p = _project(user)
+    p["spec"] = p["spec"].model_copy(update={"system_prompt": body.system_prompt})
+    _persist(user)
+    return p["spec"].model_dump()
+
+
+@app.get("/api/runs/{run_id}/surface")
+def run_surface(run_id: str, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    from .fixes import tool_surface
+
+    run = _load_run_for(user, run_id)
+    return tool_surface(AgentSpec.model_validate(run["spec"]), run)
+
+
+@app.get("/api/runs/{run_id}/analysis")
+def run_analysis(run_id: str, user: dict[str, Any] = auth.User) -> dict[str, Any]:
+    """What each constraint did in this run, in plain English, plus over-blocking (legitimate calls denied)."""
+    from .fixes import constraint_analysis
+
+    run = _load_run_for(user, run_id)
+    return constraint_analysis(AgentSpec.model_validate(run["spec"]), run)
+
+
+@app.get("/api/runs/{run_id}/fixpack.md")
+def run_fixpack(run_id: str, after: str | None = None, hardened: str | None = None, user: dict[str, Any] = auth.User):
+    """Everything a developer takes away, as one Markdown file. `after` = the enforce run, `hardened` = the
+    hardened-prompt run (both optional)."""
+    from .fixes import fix_pack, tool_surface
+
+    before = _load_run_for(user, run_id)
+    spec = AgentSpec.model_validate(before["spec"])
+    after_run = _load_run_for(user, after) if after else None
+    hard = None
+    if hardened:
+        hr = _load_run_for(user, hardened)
+        hard = {"system_prompt": hr["spec"]["system_prompt"], "changes": hr.get("prompt_changes", []), "run": hr}
+    md = fix_pack(spec, before, after_run, hard, tool_surface(spec, before))
+    return PlainTextResponse(md, media_type="text/markdown", headers={"Content-Disposition": f'attachment; filename="{spec.name}-fixpack.md"'})
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str, user: dict[str, Any] = auth.User) -> dict[str, Any]:
     job = _jobs.get(job_id)
@@ -503,10 +884,10 @@ def list_runs(user: dict[str, Any] = auth.User) -> dict[str, Any]:
             except Exception:
                 continue
             if r["run_id"] not in seen:
-                out.append({"run_id": r["run_id"], "mode": r["mode"], "model": r["model"], "agent": r["agent"], "started_at": r["started_at"], "summary": r["summary"], "base_run_id": r.get("base_run_id"), "holdout": bool(r.get("holdout")), "example": False})
+                out.append({"run_id": r["run_id"], "mode": r["mode"], "model": r["model"], "agent": r["agent"], "started_at": r["started_at"], "summary": r["summary"], "base_run_id": r.get("base_run_id"), "holdout": bool(r.get("holdout")), "variant": r.get("variant") or "", "example": False})
     for p in sorted(EXAMPLE_RUNS.glob("run_*.json")) if EXAMPLE_RUNS.exists() else []:
         r = json.loads(p.read_text(encoding="utf-8"))
-        out.append({"run_id": r["run_id"], "mode": r["mode"], "model": r["model"], "agent": r["agent"], "started_at": r["started_at"], "summary": r["summary"], "base_run_id": r.get("base_run_id"), "holdout": bool(r.get("holdout")), "example": True})
+        out.append({"run_id": r["run_id"], "mode": r["mode"], "model": r["model"], "agent": r["agent"], "started_at": r["started_at"], "summary": r["summary"], "base_run_id": r.get("base_run_id"), "holdout": bool(r.get("holdout")), "variant": r.get("variant") or "", "example": True})
     return {"runs": out}
 
 

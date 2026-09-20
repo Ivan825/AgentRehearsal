@@ -1,4 +1,4 @@
-import type { AgentSpec, Comparison, Example, Job, Run, RunListItem, Scenario } from './types'
+import type { AgentSpec, Analysis, Comparison, Coverage, Example, Job, LiveStatus, RecordedCall, Run, RunListItem, Scenario, Summary, Surface, ToolDef, Verdict } from './types'
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, '') ?? ''
 
@@ -37,9 +37,18 @@ export const api = {
   examples: () => j<{ examples: Example[] }>('/api/examples'),
   exampleSpec: (example = 'supportbot') => j<AgentSpec>(`/api/spec/example?example=${example}`),
   resetExample: (example = 'supportbot') => j<{ spec: AgentSpec; scenarios: number; example: string }>('/api/spec/reset', { method: 'POST', body: JSON.stringify({ example }) }),
+  connectMcp: (url: string, auth_header: string) => j<{ tools: ToolDef[]; count: number }>('/api/tools/connect', { method: 'POST', body: JSON.stringify({ url, auth_header }) }),
+  draftWorld: async (name: string, purpose: string, tools: ToolDef[]) => {
+    const job = await j<Job>('/api/tools/draft', { method: 'POST', body: JSON.stringify({ name, purpose, tools, apply: true }) })
+    const done = await waitJob(job.job_id)
+    return done.result as { spec: AgentSpec; rules_with_reasons: string[] }
+  },
   importTools: (tools: unknown[]) => j<{ tools: AgentSpec['tools'] }>('/api/tools/import', { method: 'POST', body: JSON.stringify({ tools }) }),
   saveScenarios: (scenarios: Scenario[]) => j<{ count: number }>('/api/scenarios', { method: 'PUT', body: JSON.stringify({ scenarios }) }),
-  parseRules: (rules: string[]) => j<{ constraints: AgentSpec['constraints'] }>('/api/rules/parse', { method: 'POST', body: JSON.stringify({ rules }) }),
+  parseRules: (rules: string[]) => j<{ constraints: AgentSpec['constraints']; notes: { id: string; confidence: number; ambiguity: string }[]; problems: string[] }>('/api/rules/parse', { method: 'POST', body: JSON.stringify({ rules }) }),
+  validateConstraints: () => j<{ problems: string[] }>('/api/constraints/validate'),
+  coverage: () => j<Coverage>('/api/scenarios/coverage'),
+  escalate: (body: { base_run_id: string; rounds?: number; model: 'bedrock' | 'scripted'; model_id?: string | null; attack_runs?: number }) => j<Job>('/api/escalate', { method: 'POST', body: JSON.stringify(body) }),
   policy: () => j<{ cedar: string; problems: string[] }>('/api/policy'),
   validatePolicy: (cedar: string) => j<{ problems: string[] }>('/api/policy/validate', { method: 'POST', body: JSON.stringify({ cedar }) }),
   scenarios: () => j<{ scenarios: Scenario[] }>('/api/scenarios'),
@@ -53,11 +62,21 @@ export const api = {
     j<Job>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
   job: (id: string) => j<Job>(`/api/jobs/${id}`),
   models: () => j<{ models: { id: string; label: string; note?: string; provider?: string; available?: boolean }[]; default: string; live: boolean; providers?: { id: string; label: string; available: boolean; env: string | null }[] }>('/api/models'),
-  workspaceMcp: () => j<{ token: string; url: string; tools: string[] }>('/api/workspace/mcp'),
+  workspaceMcp: () => j<{ token: string; url: string; tools: string[]; upstream?: string; forwarding?: boolean; mcp_json?: unknown }>('/api/workspace/mcp'),
+  liveStart: (scenario_id: string, mode: 'rehearse' | 'enforce', cedar?: string) => j<{ scenario_id: string; prompt: string; mode: string }>('/api/live/start', { method: 'POST', body: JSON.stringify({ scenario_id, mode, cedar }) }),
+  liveStatus: () => j<LiveStatus>('/api/live'),
+  liveStop: (final_text: string) => j<{ scenario_id: string; verdict: Verdict; reason: string; calls: RecordedCall[]; attempts: number }>('/api/live/stop', { method: 'POST', body: JSON.stringify({ final_text }) }),
+  liveFinish: (base_run_id?: string | null) => j<{ run_id: string; summary: Summary }>('/api/live/finish', { method: 'POST', body: JSON.stringify({ base_run_id }) }),
+  liveReset: () => j<{ ok: boolean }>('/api/live/reset', { method: 'POST' }),
   rotateMcp: () => j<{ token: string; url: string; tools: string[] }>('/api/workspace/mcp/rotate', { method: 'POST' }),
   runs: () => j<{ runs: RunListItem[] }>('/api/runs'),
   run: (id: string) => j<Run>(`/api/runs/${id}`),
-  reportUrl: (id: string) => `${BASE}/api/runs/${id}/report.md`,
+  reportUrl: (id: string) => `${BASE}/api/runs/${id}/report.md?token=${encodeURIComponent(session.token ?? '')}`,
+  fixpackUrl: (id: string, after?: string | null, hardened?: string | null) => `${BASE}/api/runs/${id}/fixpack.md?token=${encodeURIComponent(session.token ?? '')}${after ? `&after=${after}` : ''}${hardened ? `&hardened=${hardened}` : ''}`,
+  harden: (body: { base_run_id: string; model: 'bedrock' | 'scripted'; model_id?: string | null; attack_runs?: number }) => j<Job>('/api/fix/harden', { method: 'POST', body: JSON.stringify(body) }),
+  applyPrompt: (system_prompt: string) => j<AgentSpec>('/api/fix/apply-prompt', { method: 'POST', body: JSON.stringify({ system_prompt }) }),
+  surface: (id: string) => j<Surface>(`/api/runs/${id}/surface`),
+  analysis: (id: string) => j<Analysis>(`/api/runs/${id}/analysis`),
   compare: (before: string, after: string) => j<Comparison>(`/api/compare?before=${before}&after=${after}`),
   validate: (body: { base_run_id: string; per_constraint?: number; model: 'bedrock' | 'scripted'; model_id?: string | null; attack_runs?: number }) => j<Job>('/api/validate', { method: 'POST', body: JSON.stringify(body) }),
 }

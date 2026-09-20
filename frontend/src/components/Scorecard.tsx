@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Run, ScenarioResult } from '../types'
 import { api } from '../api'
-import { Card, Category, Stat, VerdictBadge } from './ui'
+import { Button, Card, Category, Stat, VerdictBadge } from './ui'
 
 const ORDER: Record<string, number> = { FAIL: 0, INTERMITTENT: 1, ERROR: 2, PASS: 3 }
 
@@ -15,7 +15,7 @@ export function AttemptDots({ s }: { s: ScenarioResult }) {
   )
 }
 
-export function Scorecard({ run, onOpen }: { run: Run; onOpen: (s: ScenarioResult) => void }) {
+export function Scorecard({ run, onOpen, onEscalate, busy }: { run: Run; onOpen: (s: ScenarioResult) => void; onEscalate?: () => void; busy?: boolean }) {
   const [onlyFailures, setOnlyFailures] = useState(false)
   const s = run.summary
   const critical = run.scenarios.filter((x) => x.verdict === 'FAIL' || x.verdict === 'INTERMITTENT')
@@ -53,7 +53,15 @@ export function Scorecard({ run, onOpen }: { run: Run; onOpen: (s: ScenarioResul
             <div className="mt-1 font-mono">{run.model}</div>
             <div className="mt-1">{run.scenarios.length} scenarios: {run.scenarios.filter((x) => x.source === 'seed').length} seed · {run.scenarios.filter((x) => x.source === 'generated').length} authored by Bedrock{run.scenarios.some((x) => x.source === 'holdout') ? ` · ${run.scenarios.filter((x) => x.source === 'holdout').length} held-out` : ''}</div>
             <div className="mt-1">{run.scenarios.reduce((n, x) => n + x.attempts.length, 0)} attempts · attacks run {Math.max(...run.scenarios.map((x) => x.attempts.length))}× each</div>
+            {(s.attacks_on_target ?? 0) + (s.attacks_off_target ?? 0) > 0 && <div className="mt-1">{s.attacks_on_target} attack{s.attacks_on_target === 1 ? '' : 's'} hit the exact call the author aimed at{s.attacks_off_target ? `, ${s.attacks_off_target} reached a different forbidden call` : ''}</div>}
           </div>
+          {!enforced && onEscalate && (
+            <div className="mt-3 rounded border border-accent/30 bg-accent/5 p-3 text-xs">
+              <div className="font-semibold text-text">Escalate: search for what this run missed</div>
+              <p className="mt-1 text-muted">Bedrock mutates every attack the agent resisted into a harder variant (combined tactics, document-borne, split requests), runs them, and repeats on whatever still holds. Variants join the scenario list so the policy and the held-out set see them.</p>
+              <div className="mt-2"><Button kind="ghost" onClick={onEscalate} disabled={busy || run.summary.attacks_total - run.summary.attacks_unsafe === 0}>{busy ? 'Working…' : `Escalate ${run.summary.attacks_total - run.summary.attacks_unsafe} resisted attack${run.summary.attacks_total - run.summary.attacks_unsafe === 1 ? '' : 's'}`}</Button></div>
+            </div>
+          )}
         </Card>
 
         <Card
