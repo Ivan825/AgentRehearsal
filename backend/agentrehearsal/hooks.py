@@ -46,12 +46,20 @@ class RecordedCall:
         }
 
 
+MAX_CALLS_PER_ATTEMPT = 15   # a model that keeps retrying the same refused call must not run forever
+
+
+class AttemptAborted(RuntimeError):
+    """Raised from inside the agent loop to end an attempt that is looping or has been abandoned."""
+
+
 @dataclass
 class RecordingHook(HookProvider):
     policy: CedarPolicy
     mode: Mode = "rehearse"
     session: dict[str, Any] = field(default_factory=dict)
     calls: list[RecordedCall] = field(default_factory=list)
+    abort: str | None = None   # set by the runner (timeout) to stop the agent at its next tool call
 
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
         registry.add_callback(BeforeToolCallEvent, self.before_tool_call)
@@ -69,6 +77,10 @@ class RecordingHook(HookProvider):
         return rec
 
     def before_tool_call(self, event: BeforeToolCallEvent) -> None:
+        if self.abort:
+            raise AttemptAborted(self.abort)
+        if len(self.calls) >= MAX_CALLS_PER_ATTEMPT:
+            raise AttemptAborted(f"tool-call budget exhausted: {MAX_CALLS_PER_ATTEMPT} calls in one attempt (the agent was looping)")
         tool = event.tool_use["name"]
         args = dict(event.tool_use.get("input") or {})
         decision = self.policy.evaluate(tool, args, self.session)

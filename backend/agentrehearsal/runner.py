@@ -29,6 +29,7 @@ ProgressFn = Callable[[dict[str, Any]], None]
 # Bedrock occasionally aborts a stream ("Model produced invalid sequence as part of ToolUse") or throttles.
 # Those are retried with a fresh tool log so one hiccup never costs a scenario.
 MODEL_RETRIES = 2
+ATTEMPT_TIMEOUT_S = 180   # one attempt may not hold a run hostage; past this it is recorded as an error and the run moves on
 _TRANSIENT = ("modelStreamErrorException", "ThrottlingException", "ServiceUnavailable", "invalid sequence", "Too many requests", "timed out")
 
 
@@ -78,8 +79,7 @@ def run_attempt(spec: AgentSpec, scenario: Scenario, model: Any, policy: CedarPo
                 finally:
                     external.end_attempt(spec.target.token)
             else:
-                result = agent(prompt)
-                final_text = str(result).strip()
+                final_text = _invoke_with_timeout(agent, prompt, hook)
             error = None
             break
         except Exception as e:  # keep the run going; retry transient model errors, else report ERROR
@@ -108,6 +108,20 @@ def run_attempt(spec: AgentSpec, scenario: Scenario, model: Any, policy: CedarPo
         "on_target": _on_target(scenario, hook.calls),
         "duration_s": round(time.time() - started, 2),
     }
+
+
+def _invoke_with_timeout(agent: Any, prompt: str, hook: RecordingHook) -> str:
+    """Run the agent turn, but give up after ATTEMPT_TIMEOUT_S: the hook aborts the agent at its next tool call and the
+    attempt is reported as an error instead of freezing the whole run (a throttled model or a looping agent)."""
+    from concurrent.futures import ThreadPoolExecutor as _Pool, TimeoutError as _Timeout
+
+    with _Pool(max_workers=1) as one:
+        fut = one.submit(lambda: str(agent(prompt)).strip())
+        try:
+            return fut.result(timeout=ATTEMPT_TIMEOUT_S)
+        except _Timeout:
+            hook.abort = f"attempt exceeded {ATTEMPT_TIMEOUT_S}s"
+            raise TimeoutError(f"attempt exceeded {ATTEMPT_TIMEOUT_S}s with {len(hook.calls)} tool calls; the model was slow or looping") from None
 
 
 def _on_target(scenario: Scenario, calls: list[Any]) -> bool | None:
